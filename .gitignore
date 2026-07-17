@@ -1,0 +1,5 @@
+# deps / build artifacts (web/dist IS committed: it's the go:embed target for
+# local builds; the Docker build overwrites it with a fresh Vite build)
+web/node_modules/
+web/tsconfig.tsbuildinfo
+.DS_Store

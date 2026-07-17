@@ -1,0 +1,129 @@
+// Package api implements the HTTP JSON API mounted under /api.
+package api
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"log"
+	"net/http"
+
+	"github.com/jackc/pgx/v5"
+
+	"flightdeck/internal/auth"
+	"flightdeck/internal/service"
+	"flightdeck/internal/store"
+)
+
+type Server struct {
+	St  *store.Store
+	Svc *service.Service
+}
+
+func New(st *store.Store, svc *service.Service) *Server {
+	return &Server{St: st, Svc: svc}
+}
+
+// Routes returns the /api handler with per-route API-key scope enforcement.
+func (s *Server) Routes() http.Handler {
+	mux := http.NewServeMux()
+
+	read := func(h http.HandlerFunc) http.Handler { return auth.Middleware(s.St, auth.ScopeRead)(h) }
+	write := func(h http.HandlerFunc) http.Handler { return auth.Middleware(s.St, auth.ScopeWrite)(h) }
+	ingest := func(h http.HandlerFunc) http.Handler { return auth.Middleware(s.St, auth.ScopeIngest)(h) }
+
+	// projects
+	mux.Handle("GET /projects", read(s.listProjects))
+	mux.Handle("POST /projects", write(s.createProject))
+	mux.Handle("GET /projects/{slug}", read(s.getProject))
+	mux.Handle("PATCH /projects/{slug}", write(s.patchProject))
+
+	// items
+	mux.Handle("GET /items", read(s.listItems))
+	mux.Handle("POST /items", write(s.createItem))
+	mux.Handle("GET /items/{id}", read(s.getItem))
+	mux.Handle("PATCH /items/{id}", write(s.patchItem))
+	mux.Handle("DELETE /items/{id}", write(s.deleteItem))
+	mux.Handle("GET /items/{id}/links", read(s.listLinks))
+	mux.Handle("GET /items/{id}/refs", read(s.listItemRefs))
+	mux.Handle("POST /items/{id}/refs", write(s.createItemRef))
+
+	// item links
+	mux.Handle("POST /links", write(s.createLink))
+	mux.Handle("DELETE /links/{id}", write(s.deleteLink))
+
+	// item refs (code grounding)
+	mux.Handle("DELETE /refs/{id}", write(s.deleteItemRef))
+
+	// activity
+	mux.Handle("GET /activity", read(s.listActivity))
+	mux.Handle("POST /activity", write(s.createActivity))
+
+	// context (orient)
+	mux.Handle("GET /context", read(s.globalContext))
+	mux.Handle("GET /context/{slug}", read(s.projectContext))
+
+	// agent decision helpers
+	mux.Handle("GET /next-action", read(s.nextAction))
+	mux.Handle("GET /digest/{slug}", read(s.digest))
+	mux.Handle("GET /stale", read(s.stale))
+
+	// webhooks
+	mux.Handle("GET /webhooks", read(s.listWebhooks))
+	mux.Handle("GET /webhooks/events", read(s.listWebhookEvents))
+	mux.Handle("POST /webhooks", write(s.createWebhook))
+	mux.Handle("DELETE /webhooks/{id}", write(s.deleteWebhook))
+
+	// search
+	mux.Handle("GET /search", read(s.search))
+
+	// ingest — public, cross-origin, and rate-limited (its key is embedded in
+	// public HTML). CORS wraps the outside so the preflight skips auth.
+	ingestLimiter := newIPLimiter(1, 10) // ~1 report/sec/IP, burst 10
+	mux.Handle("POST /ingest/bug", corsIngest(ingestLimiter.middleware(ingest(s.ingestBug))))
+	mux.Handle("OPTIONS /ingest/bug", corsIngest(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+
+	return http.StripPrefix("/api", mux)
+}
+
+// --- helpers ---
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if v != nil {
+		_ = json.NewEncoder(w).Encode(v)
+	}
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// writeDBError maps pgx.ErrNoRows to 404, a version conflict to 409, and
+// everything else to a generic 500. The real error is logged server-side
+// rather than leaked to the client.
+func writeDBError(w http.ResponseWriter, err error) {
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if errors.Is(err, service.ErrConflict) {
+		writeError(w, http.StatusConflict, service.ErrConflict.Error())
+		return
+	}
+	log.Printf("db error: %v", err)
+	writeError(w, http.StatusInternalServerError, "internal error")
+}
+
+func decodeJSON(r *http.Request, dst any) error {
+	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		if errors.Is(err, io.EOF) {
+			return errors.New("empty request body")
+		}
+		return err
+	}
+	return nil
+}
