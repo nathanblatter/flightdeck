@@ -340,3 +340,61 @@ type ItemsPage struct {
 	Items      []Item `json:"items"`
 	NextOffset *int   `json:"next_offset,omitempty"`
 }
+
+// UsageReport summarizes how agents used flightdeck over a window — per-tool
+// stats, unused tools, daily volume, top projects, and search quality — so the
+// service can be improved from observed behavior.
+type UsageReport struct {
+	Days        int         `json:"days"`
+	Since       time.Time   `json:"since"`
+	TotalCalls  int         `json:"total_calls"`
+	TotalErrors int         `json:"total_errors"`
+	Tools       []ToolUsage `json:"tools"`
+	// UnusedTools are registered tools with zero calls in the window —
+	// candidates for removal, or a sign agents don't know they exist.
+	UnusedTools  []string       `json:"unused_tools,omitempty"`
+	TopProjects  []ProjectCalls `json:"top_projects,omitempty"`
+	Daily        []DayCalls     `json:"daily,omitempty"`
+	RecentErrors []ToolError    `json:"recent_errors,omitempty"`
+	Search       SearchUsage    `json:"search"`
+}
+
+// ToolUsage is one tool's stats. AvgResultKB approximates the token cost an
+// agent pays per call.
+type ToolUsage struct {
+	Tool        string    `json:"tool"`
+	Calls       int       `json:"calls"`
+	Errors      int       `json:"errors,omitempty"`
+	P50Ms       float64   `json:"p50_ms"`
+	P95Ms       float64   `json:"p95_ms"`
+	AvgResultKB float64   `json:"avg_result_kb"`
+	LastUsed    time.Time `json:"last_used"`
+}
+
+type ProjectCalls struct {
+	Project string `json:"project"`
+	Calls   int    `json:"calls"`
+}
+
+type DayCalls struct {
+	Day    string `json:"day"`
+	Calls  int    `json:"calls"`
+	Errors int    `json:"errors,omitempty"`
+}
+
+type ToolError struct {
+	Tool  string    `json:"tool"`
+	Error string    `json:"error"`
+	At    time.Time `json:"at"`
+}
+
+// SearchUsage reports search quality: zero-result queries are recall gaps;
+// rescues count searches where a fallback tier saved a lexical miss.
+type SearchUsage struct {
+	Searches          int      `json:"searches"`
+	ZeroResult        int      `json:"zero_result"`
+	SemanticRescues   int      `json:"semantic_rescues"`
+	TrigramRescues    int      `json:"trigram_rescues"`
+	AvgReturned       float64  `json:"avg_returned"`
+	ZeroResultQueries []string `json:"zero_result_queries,omitempty"`
+}

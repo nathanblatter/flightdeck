@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"golang.org/x/sync/errgroup"
 
+	"flightdeck/internal/auth"
 	"flightdeck/internal/dto"
 	"flightdeck/internal/embed"
 	"flightdeck/internal/pgvec"
@@ -357,7 +358,7 @@ func (s *Service) SearchSmart(ctx context.Context, q string, projectID pgtype.UU
 			qvec = &v
 		}
 	}
-	items, err := s.searchItems(ctx, q, qvec, projectID, typ, lim, itemMax)
+	items, tiers, err := s.searchItems(ctx, q, qvec, projectID, typ, lim, itemMax)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -365,7 +366,14 @@ func (s *Service) SearchSmart(ctx context.Context, q string, projectID pgtype.UU
 	if err != nil {
 		return nil, nil, err
 	}
+	s.logSearch(ctx, auth.Actor(ctx), q, tiers.fts, tiers.semantic, tiers.trigram, len(acts), len(items))
 	return items, acts, nil
+}
+
+// tierHits counts how many results each recall tier contributed to a search —
+// the raw material for tuning search from observed behavior.
+type tierHits struct {
+	fts, semantic, trigram int
 }
 
 // semanticMaxDistance is the cosine-distance ceiling (0=identical, 2=opposite)
@@ -374,11 +382,13 @@ func (s *Service) SearchSmart(ctx context.Context, q string, projectID pgtype.UU
 // FLIGHTDECK_SEMANTIC_MAX_DISTANCE.
 var semanticMaxDistance = envFloat("FLIGHTDECK_SEMANTIC_MAX_DISTANCE", 0.6)
 
-func (s *Service) searchItems(ctx context.Context, q string, qvec *pgvec.Vector, projectID pgtype.UUID, typ *string, lim *int32, maxBody int) ([]dto.Item, error) {
+func (s *Service) searchItems(ctx context.Context, q string, qvec *pgvec.Vector, projectID pgtype.UUID, typ *string, lim *int32, maxBody int) ([]dto.Item, tierHits, error) {
+	var tiers tierHits
 	fts, err := s.St.SearchItems(ctx, store.SearchItemsParams{Q: q, ProjectID: projectID, Type: typ, Lim: lim})
 	if err != nil {
-		return nil, err
+		return nil, tiers, err
 	}
+	tiers.fts = len(fts)
 	var sem []dto.Item
 	if qvec != nil {
 		rows, err := s.St.SearchItemsSemantic(ctx, store.SearchItemsSemanticParams{
@@ -393,17 +403,19 @@ func (s *Service) searchItems(ctx context.Context, q string, qvec *pgvec.Vector,
 			log.Printf("semantic item search (continuing lexical-only): %v", err)
 		} else {
 			sem = dto.ToSemanticItemsTrunc(rows, maxBody)
+			tiers.semantic = len(sem)
 		}
 	}
 	merged := rrfMerge(func(it dto.Item) string { return it.ID }, dto.ToSearchItemsTrunc(fts, maxBody), sem)
 	if len(merged) > 0 {
-		return capLen(merged, lim), nil
+		return capLen(merged, lim), tiers, nil
 	}
 	fz, err := s.St.SearchItemsFuzzy(ctx, store.SearchItemsFuzzyParams{Q: q, ProjectID: projectID, Type: typ, Lim: lim})
 	if err != nil {
-		return nil, err
+		return nil, tiers, err
 	}
-	return dto.ToFuzzyItemsTrunc(fz, maxBody), nil
+	tiers.trigram = len(fz)
+	return dto.ToFuzzyItemsTrunc(fz, maxBody), tiers, nil
 }
 
 func (s *Service) searchActivity(ctx context.Context, q string, qvec *pgvec.Vector, projectID pgtype.UUID, maxBody int) ([]dto.Activity, error) {

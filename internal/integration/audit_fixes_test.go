@@ -6,7 +6,11 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"flightdeck/internal/service"
 	"flightdeck/internal/store"
 )
 
@@ -179,5 +183,54 @@ func TestActivityEmbedding(t *testing.T) {
 	}
 	if len(hits) != 1 || hits[0].ID != row.ID {
 		t.Fatalf("semantic hits = %d, want the decision", len(hits))
+	}
+}
+
+// Tool-call and search telemetry land in the analytics tables and roll up into
+// the usage report.
+func TestUsageAnalytics(t *testing.T) {
+	st, svc := setup(t)
+	ctx := context.Background()
+	if _, err := st.Pool.Exec(ctx, `TRUNCATE tool_calls, search_log`); err != nil {
+		t.Fatal(err)
+	}
+	p := mkProject(t, st, "alpha")
+	svc.CreateItem(ctx, store.CreateItemParams{ProjectID: p.ID, Title: "searchable widget"}, "t")
+
+	svc.RecordToolCall(ctx, service.ToolCall{
+		Tool: "create_item", Actor: "tester", Project: "alpha", OK: true,
+		Duration: 42 * time.Millisecond, Args: []byte(`{"project":"alpha"}`), ResultBytes: 512,
+	})
+	svc.RecordToolCall(ctx, service.ToolCall{
+		Tool: "get_item", Actor: "tester", OK: false, Err: "no item with id or ref \"nope\"",
+	})
+
+	// SearchSmart logs a search_log row: one FTS hit, then a zero-result query.
+	if _, _, err := svc.SearchSmart(ctx, "widget", pgtype.UUID{}, nil, nil, 0, 0); err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	svc.SearchSmart(ctx, "zzqqxxyyzz", pgtype.UUID{}, nil, nil, 0, 0)
+
+	rep, err := svc.UsageReport(ctx, 7, []string{"create_item", "get_item", "digest"})
+	if err != nil {
+		t.Fatalf("usage report: %v", err)
+	}
+	if rep.TotalCalls != 2 || rep.TotalErrors != 1 {
+		t.Fatalf("calls/errors = %d/%d, want 2/1", rep.TotalCalls, rep.TotalErrors)
+	}
+	if len(rep.UnusedTools) != 1 || rep.UnusedTools[0] != "digest" {
+		t.Fatalf("unused tools = %v, want [digest]", rep.UnusedTools)
+	}
+	if len(rep.TopProjects) != 1 || rep.TopProjects[0].Project != "alpha" {
+		t.Fatalf("top projects = %v, want alpha", rep.TopProjects)
+	}
+	if rep.Search.Searches != 2 || rep.Search.ZeroResult != 1 {
+		t.Fatalf("searches/zero = %d/%d, want 2/1", rep.Search.Searches, rep.Search.ZeroResult)
+	}
+	if len(rep.Search.ZeroResultQueries) != 1 || rep.Search.ZeroResultQueries[0] != "zzqqxxyyzz" {
+		t.Fatalf("zero-result queries = %v", rep.Search.ZeroResultQueries)
+	}
+	if len(rep.RecentErrors) != 1 || rep.RecentErrors[0].Tool != "get_item" {
+		t.Fatalf("recent errors = %v", rep.RecentErrors)
 	}
 }

@@ -77,6 +77,9 @@ func (s *Server) Routes() http.Handler {
 	// search
 	mux.Handle("GET /search", read(s.search))
 
+	// usage analytics (how agents use the service)
+	mux.Handle("GET /usage", read(s.usageReport))
+
 	// ingest — public, cross-origin, and rate-limited (its key is embedded in
 	// public HTML). CORS wraps the outside so the preflight skips auth.
 	ingestLimiter := newIPLimiter(1, 10) // ~1 report/sec/IP, burst 10

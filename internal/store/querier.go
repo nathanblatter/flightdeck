@@ -26,6 +26,7 @@ type Querier interface {
 	CreateItemRef(ctx context.Context, arg CreateItemRefParams) (ItemRef, error)
 	CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error)
 	CreateWebhook(ctx context.Context, arg CreateWebhookParams) (Webhook, error)
+	DailyToolCalls(ctx context.Context, calledAt time.Time) ([]DailyToolCallsRow, error)
 	DeleteItemLink(ctx context.Context, id uuid.UUID) error
 	DeleteItemRef(ctx context.Context, id uuid.UUID) error
 	DeleteWebhook(ctx context.Context, id uuid.UUID) error
@@ -43,6 +44,8 @@ type Querier interface {
 	// Upsert so marking a row 'failed' and later embedding it (or vice versa in a
 	// race) never errors.
 	InsertActivityEmbedding(ctx context.Context, arg InsertActivityEmbeddingParams) error
+	InsertSearchLog(ctx context.Context, arg InsertSearchLogParams) error
+	InsertToolCall(ctx context.Context, arg InsertToolCallParams) error
 	// Atomically claim a batch of due events and push their next attempt into the
 	// future (a lease), so delivery happens outside the row lock and concurrent
 	// workers never grab the same event.
@@ -101,10 +104,14 @@ type Querier interface {
 	// cutoff. Decisions, progress, status changes, and rejections are kept — they
 	// are the durable "why" an agent reads.
 	PurgeOldActivity(ctx context.Context, createdAt time.Time) (int64, error)
+	PurgeOldSearchLog(ctx context.Context, searchedAt time.Time) (int64, error)
+	PurgeOldToolCalls(ctx context.Context, calledAt time.Time) (int64, error)
 	PurgeParkedWebhookEvents(ctx context.Context, parkedAt *time.Time) (int64, error)
 	// Hard-delete items soft-deleted before the cutoff, reclaiming index space and
 	// dropping FTS tombstones.
 	PurgeSoftDeletedItems(ctx context.Context, deletedAt *time.Time) (int64, error)
+	RecentToolErrors(ctx context.Context, calledAt time.Time) ([]RecentToolErrorsRow, error)
+	RecentZeroResultSearches(ctx context.Context, searchedAt time.Time) ([]RecentZeroResultSearchesRow, error)
 	// delivered_hook_ids records the subscribers that already ACKed this event, so
 	// the retry only re-POSTs to the ones still failing (no duplicate deliveries).
 	RescheduleWebhookEvent(ctx context.Context, arg RescheduleWebhookEventParams) error
@@ -124,12 +131,19 @@ type Querier interface {
 	// caller falls through to trigram) rather than surfacing the globally-closest
 	// but irrelevant items.
 	SearchItemsSemantic(ctx context.Context, arg SearchItemsSemanticParams) ([]SearchItemsSemanticRow, error)
+	// semantic_rescues / trigram_rescues: searches where lexical FTS found nothing
+	// but a fallback tier did — direct evidence those tiers earn their keep.
+	SearchUsageSummary(ctx context.Context, searchedAt time.Time) (SearchUsageSummaryRow, error)
 	// Store an embedding, but only if the item's content hasn't changed since it was
 	// read for embedding (guarded by the still-NULL check) — so an edit that races
 	// the embedder isn't clobbered with a stale vector.
 	SetItemEmbedding(ctx context.Context, arg SetItemEmbeddingParams) error
 	SetProjectInstructions(ctx context.Context, arg SetProjectInstructionsParams) (Project, error)
 	SoftDeleteItem(ctx context.Context, id uuid.UUID) (Item, error)
+	// Per-tool behavior over a window: volume, error count, latency percentiles,
+	// and average result size (the token-cost proxy agents pay to call it).
+	ToolCallStats(ctx context.Context, calledAt time.Time) ([]ToolCallStatsRow, error)
+	TopProjectsByToolCalls(ctx context.Context, calledAt time.Time) ([]TopProjectsByToolCallsRow, error)
 	TouchAPIKey(ctx context.Context, id uuid.UUID) error
 	// Bumps version on every write. When expected_version is supplied it acts as a
 	// compare-and-swap: a mismatch matches no row (caller maps that to a conflict).

@@ -12,6 +12,7 @@ const (
 	activityRetention     = 90 * 24 * time.Hour // purge low-signal activity older than
 	webhookEventRetention = 7 * 24 * time.Hour  // purge delivered outbox rows older than
 	parkedEventRetention  = 30 * 24 * time.Hour // purge dead-lettered outbox rows older than
+	usageRetention        = 60 * 24 * time.Hour // purge tool-call / search analytics older than
 )
 
 // RunMaintenance sweeps once on startup, then daily until ctx is cancelled:
@@ -52,6 +53,16 @@ func (s *Service) runMaintenanceOnce(ctx context.Context) {
 		log.Printf("maintenance: purge parked webhook events: %v", err)
 	} else if n > 0 {
 		log.Printf("maintenance: purged %d parked webhook events", n)
+	}
+	if n, err := s.St.PurgeOldToolCalls(ctx, now.Add(-usageRetention)); err != nil {
+		log.Printf("maintenance: purge tool calls: %v", err)
+	} else if n > 0 {
+		log.Printf("maintenance: purged %d tool-call rows", n)
+	}
+	if n, err := s.St.PurgeOldSearchLog(ctx, now.Add(-usageRetention)); err != nil {
+		log.Printf("maintenance: purge search log: %v", err)
+	} else if n > 0 {
+		log.Printf("maintenance: purged %d search-log rows", n)
 	}
 }
 

@@ -25,6 +25,15 @@ import (
 type handlers struct {
 	st  *store.Store
 	svc *service.Service
+	// toolNames is every registered tool, collected by addTool so usage_report
+	// can flag registered-but-never-called tools.
+	toolNames []string
+}
+
+// addTool registers a tool and records its name in h.toolNames.
+func addTool[In, Out any](h *handlers, s *mcpsdk.Server, t *mcpsdk.Tool, fn mcpsdk.ToolHandlerFor[In, Out]) {
+	mcpsdk.AddTool(s, t, fn)
+	h.toolNames = append(h.toolNames, t.Name)
 }
 
 // NewHandler builds the MCP server, registers all tools, and returns an
@@ -37,6 +46,7 @@ func NewHandler(st *store.Store, svc *service.Service, version string) http.Hand
 	}, nil)
 	h.register(server)
 	server.AddReceivingMiddleware(metricsMiddleware)
+	server.AddReceivingMiddleware(h.usageMiddleware)
 	return mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return server }, nil)
 }
 
@@ -53,6 +63,43 @@ func metricsMiddleware(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 		start := time.Now()
 		res, err := next(ctx, method, req)
 		metrics.MCP(name, err == nil, time.Since(start))
+		return res, err
+	}
+}
+
+// usageMiddleware records every tools/call into the tool_calls analytics table:
+// which tool, by whom, against which project, with what args, how long it took,
+// and how big the result was (the token-cost proxy). Best-effort by design —
+// RecordToolCall swallows its own failures.
+func (h *handlers) usageMiddleware(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+	return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+		if method != "tools/call" {
+			return next(ctx, method, req)
+		}
+		call := service.ToolCall{Tool: "unknown", Actor: auth.Actor(ctx)}
+		if p, ok := req.GetParams().(*mcpsdk.CallToolParamsRaw); ok {
+			call.Tool = p.Name
+			call.Args = p.Arguments
+			// Shallow-probe the args for the project slug most tools carry.
+			var probe struct {
+				Project string `json:"project"`
+				Slug    string `json:"slug"`
+			}
+			_ = json.Unmarshal(p.Arguments, &probe)
+			if call.Project = probe.Project; call.Project == "" {
+				call.Project = probe.Slug
+			}
+		}
+		start := time.Now()
+		res, err := next(ctx, method, req)
+		call.Duration = time.Since(start)
+		call.OK = err == nil
+		if err != nil {
+			call.Err = err.Error()
+		} else if b, merr := json.Marshal(res); merr == nil {
+			call.ResultBytes = len(b)
+		}
+		h.svc.RecordToolCall(ctx, call)
 		return res, err
 	}
 }
@@ -283,6 +330,10 @@ type digestIn struct {
 	Since   *string `json:"since,omitempty" jsonschema:"RFC3339 timestamp; defaults to 7 days ago"`
 }
 
+type usageReportIn struct {
+	Days *int `json:"days,omitempty" jsonschema:"lookback window in days (default 7, max 90)"`
+}
+
 type staleIn struct {
 	InProgressDays *int `json:"in_progress_days,omitempty" jsonschema:"flag in_progress items idle longer than this (default 3)"`
 	BugDays        *int `json:"bug_days,omitempty" jsonschema:"flag bugs left in backlog longer than this (default 7)"`
@@ -291,115 +342,120 @@ type staleIn struct {
 // --- registration ---
 
 func (h *handlers) register(s *mcpsdk.Server) {
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "list_projects",
 		Description: "List projects, optionally filtered by status.",
 	}, h.listProjects)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "get_project_context",
 		Description: "Primary orient call: a project's summary, open items, recent decisions, and status counts.",
 	}, h.getProjectContext)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "get_global_context",
 		Description: "Horizontal 'load the map' view across all active projects (summary + counts + top items).",
 	}, h.getGlobalContext)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "search",
 		Description: "Search items and activity. Cascades full-text → semantic (meaning-based, vector) → trigram (typos/fragments) recall.",
 	}, h.search)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "list_items",
 		Description: "List items with optional filters (project, status, type, assignee, tag, updated_since).",
 	}, h.listItems)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "get_item",
 		Description: "Fetch a single item by UUID.",
 	}, h.getItem)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "create_item",
 		Description: "Create an item (task/bug/idea/note) under a project. Also appends a 'created' activity.",
 	}, h.createItem)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "create_items",
 		Description: "Create several items in one call (e.g. file a batch of tasks). Each gets its own 'created' activity and event.",
 	}, h.createItems)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "update_item",
 		Description: "Update an item. A status change automatically appends a 'status_change' activity.",
 	}, h.updateItem)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "log_activity",
 		Description: "Record a decision/progress/comment — the freshness flywheel. Capture the why.",
 	}, h.logActivity)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "update_project_summary",
 		Description: "Replace a project's current-state summary paragraph.",
 	}, h.updateProjectSummary)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "create_project",
 		Description: "Register a new tracked project (slug + name, optional status/summary/instructions/urls/aliases).",
 	}, h.createProject)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "resolve_project",
 		Description: "Identify the project from a filesystem path (your cwd) or git remote — no need to consult a slug table. Returns the matching project.",
 	}, h.resolveProjectTool)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "complete_item",
 		Description: "Close an item in one call: mark it done, record the why as a decision, and optionally refresh the project summary. The unit of work an agent actually finishes.",
 	}, h.completeItem)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "set_project_instructions",
 		Description: "Set a project's agent-instructions (conventions an agent reads on orient).",
 	}, h.setProjectInstructions)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "next_action",
 		Description: "Rank open, unblocked items across projects (or one) — 'what should I work on next'.",
 	}, h.nextAction)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "link_items",
 		Description: "Create a dependency/relationship between two items (blocks|relates_to|parent_of). 'blocks' affects what next_action and orient consider ready.",
 	}, h.linkItems)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "unlink_items",
 		Description: "Remove an item link by its UUID.",
 	}, h.unlinkItems)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "digest",
 		Description: "Roll up a project's recent activity since a timestamp into a compact bundle (counts, decisions, current summary) — cheaper than replaying the log.",
 	}, h.digest)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "stale",
 		Description: "Surface housekeeping targets: idle in_progress items, untriaged bugs, and projects whose summary predates their latest activity.",
 	}, h.stale)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "add_item_ref",
 		Description: "Ground an item to where it lives in code: a commit SHA, file path, PR, branch, or url.",
 	}, h.addItemRef)
 
-	mcpsdk.AddTool(s, &mcpsdk.Tool{
+	addTool(h, s, &mcpsdk.Tool{
 		Name:        "list_item_refs",
 		Description: "List an item's code references (the 'where' for a piece of work).",
 	}, h.listItemRefs)
+
+	addTool(h, s, &mcpsdk.Tool{
+		Name:        "usage_report",
+		Description: "How agents used flightdeck over a window: per-tool call/error/latency/payload stats, unused tools, daily volume, top projects, and search quality (zero-result queries, semantic/trigram rescues). Use it to tune the service from observed behavior.",
+	}, h.usageReport)
 }
 
 // --- tool implementations ---
@@ -808,6 +864,18 @@ func (h *handlers) listItemRefs(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 		return nil, refsOut{}, err
 	}
 	return nil, refsOut{Refs: dto.ToItemRefs(refs)}, nil
+}
+
+func (h *handlers) usageReport(ctx context.Context, _ *mcpsdk.CallToolRequest, in usageReportIn) (*mcpsdk.CallToolResult, dto.UsageReport, error) {
+	days := 7
+	if in.Days != nil {
+		days = *in.Days
+	}
+	rep, err := h.svc.UsageReport(ctx, days, h.toolNames)
+	if err != nil {
+		return nil, dto.UsageReport{}, err
+	}
+	return nil, rep, nil
 }
 
 func (h *handlers) stale(ctx context.Context, _ *mcpsdk.CallToolRequest, in staleIn) (*mcpsdk.CallToolResult, dto.StaleReport, error) {

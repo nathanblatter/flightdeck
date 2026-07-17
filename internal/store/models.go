@@ -104,6 +104,31 @@ type Project struct {
 	Aliases      []string  `json:"aliases"`
 }
 
+type SearchLog struct {
+	ID           int64     `json:"id"`
+	SearchedAt   time.Time `json:"searched_at"`
+	Actor        string    `json:"actor"`
+	Query        string    `json:"query"`
+	FtsHits      int32     `json:"fts_hits"`
+	SemanticHits int32     `json:"semantic_hits"`
+	TrigramHits  int32     `json:"trigram_hits"`
+	ActivityHits int32     `json:"activity_hits"`
+	Returned     int32     `json:"returned"`
+}
+
+type ToolCall struct {
+	ID          int64           `json:"id"`
+	CalledAt    time.Time       `json:"called_at"`
+	Tool        string          `json:"tool"`
+	Actor       string          `json:"actor"`
+	Project     string          `json:"project"`
+	Ok          bool            `json:"ok"`
+	Error       string          `json:"error"`
+	DurationMs  int32           `json:"duration_ms"`
+	Args        json.RawMessage `json:"args"`
+	ResultBytes int32           `json:"result_bytes"`
+}
+
 type Webhook struct {
 	ID        uuid.UUID   `json:"id"`
 	ProjectID pgtype.UUID `json:"project_id"`
