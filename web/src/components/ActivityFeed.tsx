@@ -9,6 +9,7 @@ const KIND_LABEL: Record<string, string> = {
   status_change: "Status",
   comment: "Comment",
   created: "Created",
+  rejected: "Rejected",
 };
 
 export function ActivityFeed({

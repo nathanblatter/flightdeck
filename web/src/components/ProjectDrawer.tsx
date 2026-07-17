@@ -55,7 +55,15 @@ export function ProjectDrawer({
             </header>
 
             <section>
-              <label className="field-label">Current state</label>
+              <label className="field-label">
+                Current state
+                <span className="muted sm">
+                  {" "}
+                  · updated {relativeTime(data.summary_updated_at)}
+                  {data.activities_since_summary >= 10 &&
+                    ` · ${data.activities_since_summary} activities since — may be stale`}
+                </span>
+              </label>
               <textarea
                 className="summary-edit"
                 value={summary}

@@ -23,10 +23,14 @@ type hist struct {
 
 func newHist() *hist { return &hist{counts: make([]uint64, len(buckets))} }
 
+// observe increments only the first bucket the value fits in (counts are
+// per-bucket, NOT cumulative — WritePrometheus accumulates at render time).
+// Values beyond the last bucket land only in the implicit +Inf (h.n).
 func (h *hist) observe(sec float64) {
 	for i, b := range buckets {
 		if sec <= b {
 			h.counts[i]++
+			break
 		}
 	}
 	h.sum += sec

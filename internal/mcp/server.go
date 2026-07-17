@@ -722,6 +722,9 @@ func (h *handlers) createProject(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	if in.Slug == "" || in.Name == "" {
 		return nil, dto.Project{}, fmt.Errorf("slug and name are required")
 	}
+	if err := service.ValidateProjectStatus(in.Status); err != nil {
+		return nil, dto.Project{}, err
+	}
 	p, err := h.st.CreateProject(ctx, store.CreateProjectParams{
 		Slug:         in.Slug,
 		Name:         in.Name,

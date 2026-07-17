@@ -85,3 +85,19 @@ func TestRejectedIsValidActivityKind(t *testing.T) {
 		t.Errorf("'rejected' should be a valid activity kind: %v", err)
 	}
 }
+
+func TestValidateProjectStatus(t *testing.T) {
+	for _, ok := range []string{"active", "paused", "done", "archived"} {
+		s := ok
+		if err := ValidateProjectStatus(&s); err != nil {
+			t.Fatalf("%s should be valid: %v", ok, err)
+		}
+	}
+	bad := "bogus"
+	if err := ValidateProjectStatus(&bad); err == nil {
+		t.Fatal("bogus status should be rejected")
+	}
+	if err := ValidateProjectStatus(nil); err != nil {
+		t.Fatalf("nil status should be skipped: %v", err)
+	}
+}

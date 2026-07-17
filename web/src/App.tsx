@@ -116,13 +116,15 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
     return data;
   }, [itemsQ.data, searching, tagFilter]);
 
-  const authError =
-    (projectsQ.error as Error & { status?: number })?.status === 401 ||
-    (projectsQ.error as Error & { status?: number })?.status === 403;
-  if (authError) {
-    clearApiKey();
-    onSignOut();
-  }
+  const authStatus = (projectsQ.error as Error & { status?: number })?.status;
+  const authError = authStatus === 401 || authStatus === 403;
+  // Sign out in an effect, not during render (render must stay side-effect-free).
+  useEffect(() => {
+    if (authError) {
+      clearApiKey();
+      onSignOut();
+    }
+  }, [authError, onSignOut]);
 
   return (
     <div className="app">

@@ -16,6 +16,7 @@ var (
 	ValidLinkKinds      = []string{"blocks", "relates_to", "parent_of"}
 	ValidConfidences    = []string{"unspecified", "inferred", "confirmed"}
 	ValidRefKinds       = []string{"commit", "file", "pr", "branch", "url"}
+	ValidProjectStatus  = []string{"active", "paused", "done", "archived"}
 )
 
 func oneOf(field, val string, allowed []string) error {
@@ -44,6 +45,14 @@ func ValidateItemFields(typ, status, priority *string) error {
 		if err := oneOf("priority", *priority, ValidItemPriorities); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// ValidateProjectStatus checks an optional project status; nil/empty is skipped.
+func ValidateProjectStatus(status *string) error {
+	if status != nil && *status != "" {
+		return oneOf("status", *status, ValidProjectStatus)
 	}
 	return nil
 }

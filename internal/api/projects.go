@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"flightdeck/internal/dto"
+	"flightdeck/internal/service"
 	"flightdeck/internal/store"
 )
 
@@ -27,13 +28,14 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 }
 
 type createProjectReq struct {
-	Slug         string  `json:"slug"`
-	Name         string  `json:"name"`
-	Status       *string `json:"status"`
-	Summary      *string `json:"summary"`
-	Instructions *string `json:"instructions"`
-	RepoURL      *string `json:"repo_url"`
-	SiteURL      *string `json:"site_url"`
+	Slug         string   `json:"slug"`
+	Name         string   `json:"name"`
+	Status       *string  `json:"status"`
+	Summary      *string  `json:"summary"`
+	Instructions *string  `json:"instructions"`
+	Aliases      []string `json:"aliases"`
+	RepoURL      *string  `json:"repo_url"`
+	SiteURL      *string  `json:"site_url"`
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -46,12 +48,17 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "slug and name are required")
 		return
 	}
+	if err := service.ValidateProjectStatus(req.Status); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	p, err := s.St.CreateProject(r.Context(), store.CreateProjectParams{
 		Slug:         req.Slug,
 		Name:         req.Name,
 		Status:       req.Status,
 		Summary:      req.Summary,
 		Instructions: req.Instructions,
+		Aliases:      req.Aliases,
 		RepoUrl:      req.RepoURL,
 		SiteUrl:      req.SiteURL,
 	})
@@ -63,17 +70,22 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 }
 
 type patchProjectReq struct {
-	Name         *string `json:"name"`
-	Status       *string `json:"status"`
-	Summary      *string `json:"summary"`
-	Instructions *string `json:"instructions"`
-	RepoURL      *string `json:"repo_url"`
-	SiteURL      *string `json:"site_url"`
+	Name         *string  `json:"name"`
+	Status       *string  `json:"status"`
+	Summary      *string  `json:"summary"`
+	Instructions *string  `json:"instructions"`
+	Aliases      []string `json:"aliases"`
+	RepoURL      *string  `json:"repo_url"`
+	SiteURL      *string  `json:"site_url"`
 }
 
 func (s *Server) patchProject(w http.ResponseWriter, r *http.Request) {
 	var req patchProjectReq
 	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := service.ValidateProjectStatus(req.Status); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -83,6 +95,7 @@ func (s *Server) patchProject(w http.ResponseWriter, r *http.Request) {
 		Status:       req.Status,
 		Summary:      req.Summary,
 		Instructions: req.Instructions,
+		Aliases:      req.Aliases,
 		RepoUrl:      req.RepoURL,
 		SiteUrl:      req.SiteURL,
 	})

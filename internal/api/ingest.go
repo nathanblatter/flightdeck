@@ -58,10 +58,7 @@ func (s *Server) ingestBug(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	title := strings.TrimSpace(rep.Message)
-	if len(title) > 80 {
-		title = title[:77] + "..."
-	}
+	title := bugTitle(rep.Message)
 
 	metadata := buildBugMetadata(rep)
 	var extRef *string
@@ -87,6 +84,17 @@ func (s *Server) ingestBug(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, dto.ToItem(item))
+}
+
+// bugTitle derives an item title from the report message, truncating on rune
+// boundaries — a byte slice could split a multi-byte character (emoji are
+// common in user-typed bug reports).
+func bugTitle(msg string) string {
+	title := strings.TrimSpace(msg)
+	if r := []rune(title); len(r) > 80 {
+		title = string(r[:77]) + "..."
+	}
+	return title
 }
 
 // buildBugMetadata merges the reporter-supplied meta with the source url/severity.

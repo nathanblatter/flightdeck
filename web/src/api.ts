@@ -84,9 +84,16 @@ export interface Activity {
   id: string;
   project_id: string;
   item_id?: string;
-  kind: "decision" | "progress" | "status_change" | "comment" | "created";
+  kind:
+    | "decision"
+    | "progress"
+    | "status_change"
+    | "comment"
+    | "created"
+    | "rejected";
   actor: string;
   body: string;
+  confidence?: string;
   metadata?: Record<string, unknown>;
   created_at: string;
 }
@@ -98,6 +105,11 @@ export interface ProjectContext {
   counts?: Record<string, number>;
   ready_next?: ItemBrief[];
   nudges?: string[];
+  rejected_approaches?: Activity[];
+  // Trust signals: when the summary was last written and how much has happened
+  // since (high count ⇒ treat it as stale).
+  summary_updated_at: string;
+  activities_since_summary: number;
 }
 
 export interface SearchResults {
@@ -113,6 +125,10 @@ export interface WebhookEvent {
   attempts: number;
   next_attempt_at: string;
   delivered_at?: string;
+  // Dead-lettered (attempts exhausted) — distinct from delivered.
+  parked_at?: string;
+  // Subscribers that already ACKed; retries skip these.
+  delivered_hook_ids?: string[];
   last_error?: string;
   created_at: string;
 }
