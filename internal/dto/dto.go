@@ -357,6 +357,20 @@ type UsageReport struct {
 	Daily        []DayCalls     `json:"daily,omitempty"`
 	RecentErrors []ToolError    `json:"recent_errors,omitempty"`
 	Search       SearchUsage    `json:"search"`
+	// Coverage reports how much of the corpus is actually embedded — the ceiling
+	// on what semantic search can ever return.
+	Coverage EmbeddingCoverage `json:"embedding_coverage"`
+}
+
+// EmbeddingCoverage is the semantic tier's backfill health. A low embedded
+// fraction (or a growing failed count) explains a semantic tier that rescues
+// nothing regardless of tuning.
+type EmbeddingCoverage struct {
+	ItemsTotal       int `json:"items_total"`
+	ItemsEmbedded    int `json:"items_embedded"`
+	ItemsFailed      int `json:"items_failed"`
+	ActivityTotal    int `json:"activity_total"`
+	ActivityEmbedded int `json:"activity_embedded"`
 }
 
 // ToolUsage is one tool's stats. AvgResultKB approximates the token cost an

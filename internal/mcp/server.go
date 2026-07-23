@@ -320,23 +320,8 @@ type okOut struct {
 	OK bool `json:"ok"`
 }
 
-type nextActionIn struct {
-	Project *string `json:"project,omitempty" jsonschema:"limit to one project slug; omit for all active projects"`
-	Limit   *int    `json:"limit,omitempty" jsonschema:"max items to return (default 20)"`
-}
-
-type digestIn struct {
-	Project string  `json:"project" jsonschema:"project slug"`
-	Since   *string `json:"since,omitempty" jsonschema:"RFC3339 timestamp; defaults to 7 days ago"`
-}
-
 type usageReportIn struct {
 	Days *int `json:"days,omitempty" jsonschema:"lookback window in days (default 7, max 90)"`
-}
-
-type staleIn struct {
-	InProgressDays *int `json:"in_progress_days,omitempty" jsonschema:"flag in_progress items idle longer than this (default 3)"`
-	BugDays        *int `json:"bug_days,omitempty" jsonschema:"flag bugs left in backlog longer than this (default 7)"`
 }
 
 // --- registration ---
@@ -418,13 +403,8 @@ func (h *handlers) register(s *mcpsdk.Server) {
 	}, h.setProjectInstructions)
 
 	addTool(h, s, &mcpsdk.Tool{
-		Name:        "next_action",
-		Description: "Rank open, unblocked items across projects (or one) — 'what should I work on next'.",
-	}, h.nextAction)
-
-	addTool(h, s, &mcpsdk.Tool{
 		Name:        "link_items",
-		Description: "Create a dependency/relationship between two items (blocks|relates_to|parent_of). 'blocks' affects what next_action and orient consider ready.",
+		Description: "Create a dependency/relationship between two items (blocks|relates_to|parent_of). 'blocks' affects what orient considers ready.",
 	}, h.linkItems)
 
 	addTool(h, s, &mcpsdk.Tool{
@@ -432,15 +412,12 @@ func (h *handlers) register(s *mcpsdk.Server) {
 		Description: "Remove an item link by its UUID.",
 	}, h.unlinkItems)
 
-	addTool(h, s, &mcpsdk.Tool{
-		Name:        "digest",
-		Description: "Roll up a project's recent activity since a timestamp into a compact bundle (counts, decisions, current summary) — cheaper than replaying the log.",
-	}, h.digest)
-
-	addTool(h, s, &mcpsdk.Tool{
-		Name:        "stale",
-		Description: "Surface housekeeping targets: idle in_progress items, untriaged bugs, and projects whose summary predates their latest activity.",
-	}, h.stale)
+	// next_action, digest, and stale are intentionally NOT exposed as MCP tools:
+	// get_project_context's nudges already surface the same "what's ready / what's
+	// rotting" signal inline at orient time, so agents never reached for them
+	// (zero calls in usage_report) — they only added token weight to the manifest.
+	// The logic still lives in the service layer and is served over the HTTP API
+	// (/next-action, /projects/{slug}/digest, /stale) for the web UI.
 
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "add_item_ref",
@@ -773,22 +750,6 @@ func (h *handlers) setProjectInstructions(ctx context.Context, _ *mcpsdk.CallToo
 	return nil, dto.ToProject(p), nil
 }
 
-func (h *handlers) nextAction(ctx context.Context, _ *mcpsdk.CallToolRequest, in nextActionIn) (*mcpsdk.CallToolResult, dto.NextAction, error) {
-	var slug string
-	if in.Project != nil {
-		slug = *in.Project
-	}
-	var limit int32
-	if in.Limit != nil {
-		limit = int32(*in.Limit)
-	}
-	out, err := h.svc.NextAction(ctx, slug, limit)
-	if err != nil {
-		return nil, dto.NextAction{}, err
-	}
-	return nil, out, nil
-}
-
 func (h *handlers) linkItems(ctx context.Context, _ *mcpsdk.CallToolRequest, in linkItemsIn) (*mcpsdk.CallToolResult, linkOut, error) {
 	if err := service.ValidateLinkKind(&in.Kind); err != nil {
 		return nil, linkOut{}, err
@@ -817,22 +778,6 @@ func (h *handlers) unlinkItems(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 		return nil, okOut{}, err
 	}
 	return nil, okOut{OK: true}, nil
-}
-
-func (h *handlers) digest(ctx context.Context, _ *mcpsdk.CallToolRequest, in digestIn) (*mcpsdk.CallToolResult, dto.Digest, error) {
-	since := time.Now().Add(-7 * 24 * time.Hour)
-	if in.Since != nil && *in.Since != "" {
-		t, err := time.Parse(time.RFC3339, *in.Since)
-		if err != nil {
-			return nil, dto.Digest{}, fmt.Errorf("invalid since: %w", err)
-		}
-		since = t
-	}
-	out, err := h.svc.Digest(ctx, in.Project, since)
-	if err != nil {
-		return nil, dto.Digest{}, err
-	}
-	return nil, out, nil
 }
 
 func (h *handlers) addItemRef(ctx context.Context, _ *mcpsdk.CallToolRequest, in addRefIn) (*mcpsdk.CallToolResult, refOut, error) {
@@ -879,20 +824,4 @@ func (h *handlers) usageReport(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 		return nil, dto.UsageReport{}, err
 	}
 	return nil, rep, nil
-}
-
-func (h *handlers) stale(ctx context.Context, _ *mcpsdk.CallToolRequest, in staleIn) (*mcpsdk.CallToolResult, dto.StaleReport, error) {
-	ipDays, bugDays := 3, 7
-	if in.InProgressDays != nil {
-		ipDays = *in.InProgressDays
-	}
-	if in.BugDays != nil {
-		bugDays = *in.BugDays
-	}
-	now := time.Now()
-	out, err := h.svc.Stale(ctx, now.AddDate(0, 0, -ipDays), now.AddDate(0, 0, -bugDays))
-	if err != nil {
-		return nil, dto.StaleReport{}, err
-	}
-	return nil, out, nil
 }

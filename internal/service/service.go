@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -24,23 +25,27 @@ import (
 	"flightdeck/internal/auth"
 	"flightdeck/internal/dto"
 	"flightdeck/internal/embed"
+	"flightdeck/internal/metrics"
 	"flightdeck/internal/pgvec"
 	"flightdeck/internal/store"
 )
 
 type Service struct {
-	St    *store.Store
-	hc    *http.Client
-	cache *ttlCache
-	emb   *embed.Client
+	St     *store.Store
+	hc     *http.Client
+	cache  *ttlCache
+	emb    *embed.Client
+	vcache *vecCache
 }
 
 func New(st *store.Store) *Service {
+	emb := embed.NewFromEnv()
 	return &Service{
-		St:    st,
-		hc:    &http.Client{Timeout: 10 * time.Second},
-		cache: newTTLCache(3 * time.Second),
-		emb:   embed.NewFromEnv(),
+		St:     st,
+		hc:     &http.Client{Timeout: 10 * time.Second},
+		cache:  newTTLCache(3 * time.Second),
+		emb:    emb,
+		vcache: newVecCache(emb.Model()),
 	}
 }
 
@@ -69,21 +74,8 @@ func (s *Service) CreateItem(ctx context.Context, p store.CreateItemParams, acto
 	var item store.Item
 	err := s.St.WithTx(ctx, func(q *store.Queries) error {
 		var err error
-		item, err = q.CreateItem(ctx, p)
-		if err != nil {
-			return err
-		}
-		_, err = q.CreateActivity(ctx, store.CreateActivityParams{
-			ProjectID: item.ProjectID,
-			ItemID:    itemUUID(item.ID),
-			Kind:      strptr("created"),
-			Actor:     strptr(actor),
-			Body:      strptr(fmt.Sprintf("created %s: %s", item.Type, item.Title)),
-		})
-		if err != nil {
-			return err
-		}
-		return s.enqueue(ctx, q, item.ProjectID, "item.created", dto.ToItem(item))
+		item, err = s.createItemTx(ctx, q, p, actor)
+		return err
 	})
 	if err != nil {
 		// Lost an idempotency-key race: another caller inserted it first.
@@ -95,6 +87,42 @@ func (s *Service) CreateItem(ctx context.Context, p store.CreateItemParams, acto
 		return item, err
 	}
 	s.cache.clear()
+	return item, nil
+}
+
+// createItemTx inserts one item plus its `created` activity and outbox event on
+// an existing transaction's queryset. Kept separate from CreateItem so a batch
+// can run many creates in a single tx (see BulkCreateItems). Honors an
+// idempotency key by returning a prior item unchanged; the check runs inside the
+// tx so it also sees items created earlier in the same batch.
+func (s *Service) createItemTx(ctx context.Context, q *store.Queries, p store.CreateItemParams, actor string) (store.Item, error) {
+	if p.IdempotencyKey != nil && *p.IdempotencyKey != "" {
+		existing, err := q.GetItemByIdempotencyKey(ctx, store.GetItemByIdempotencyKeyParams{
+			ProjectID: p.ProjectID, IdempotencyKey: p.IdempotencyKey,
+		})
+		if err == nil {
+			return existing, nil
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return store.Item{}, err
+		}
+	}
+	item, err := q.CreateItem(ctx, p)
+	if err != nil {
+		return store.Item{}, err
+	}
+	_, err = q.CreateActivity(ctx, store.CreateActivityParams{
+		ProjectID: item.ProjectID,
+		ItemID:    itemUUID(item.ID),
+		Kind:      strptr("created"),
+		Actor:     strptr(actor),
+		Body:      strptr(fmt.Sprintf("created %s: %s", item.Type, item.Title)),
+	})
+	if err != nil {
+		return store.Item{}, err
+	}
+	if err := s.enqueue(ctx, q, item.ProjectID, "item.created", dto.ToItem(item)); err != nil {
+		return store.Item{}, err
+	}
 	return item, nil
 }
 
@@ -347,27 +375,119 @@ var ErrConflict = errors.New("version conflict: item was modified since you read
 // matches anything, items fall back to trigram for typos/fragments. The
 // semantic tier is skipped (with a log) when embeddings aren't configured or
 // the embedding call fails, so search degrades cleanly to lexical-only.
+// minSemanticQueryLen is the shortest query (in runes, after trimming) worth
+// embedding. Below it a query is a keystroke fragment ("j", "jo") that can't
+// carry meaning — embedding it just burns the ~1.4s OpenAI round-trip on a
+// zero-result path. Lexical (FTS/trigram) still runs. Tunable via
+// FLIGHTDECK_MIN_SEMANTIC_QUERY_LEN.
+var minSemanticQueryLen = int(envFloat("FLIGHTDECK_MIN_SEMANTIC_QUERY_LEN", 3))
+
+// lazySemanticMinFTS is the lexical-recall bar above which semantic search is
+// skipped entirely: if plain FTS already returned this many items, the query is
+// well-served lexically and the embedding (and its latency) is pure waste. Only
+// thin lexical recall pays for semantic. Tunable via
+// FLIGHTDECK_LAZY_SEMANTIC_MIN_FTS.
+var lazySemanticMinFTS = int(envFloat("FLIGHTDECK_LAZY_SEMANTIC_MIN_FTS", 5))
+
 func (s *Service) SearchSmart(ctx context.Context, q string, projectID pgtype.UUID, typ *string, lim *int32, itemMax, actMax int) ([]dto.Item, []dto.Activity, error) {
-	// Embed the query once, shared by the item and activity semantic tiers.
-	var qvec *pgvec.Vector
-	if s.emb.Enabled() {
-		if vecs, err := s.emb.Embed(ctx, []string{q}); err != nil {
-			log.Printf("search: embedding query failed (lexical-only for this query): %v", err)
-		} else if len(vecs) == 1 {
-			v := pgvec.New(vecs[0])
-			qvec = &v
-		}
-	}
-	items, tiers, err := s.searchItems(ctx, q, qvec, projectID, typ, lim, itemMax)
-	if err != nil {
+	// Record which recall path set this query's latency, so the win from lazy
+	// semantic + the Redis cache is measurable rather than assumed.
+	start := time.Now()
+	path := "lexical"
+	defer func() { metrics.Search(path, time.Since(start)) }()
+
+	// Phase 1: lexical (FTS) on both surfaces, concurrently. These are ~10ms
+	// Postgres reads and gate whether the expensive embed is worth doing.
+	var itemFTS []store.SearchItemsRow
+	var actFTS []store.SearchActivityRow
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		r, err := s.St.SearchItems(gctx, store.SearchItemsParams{Q: q, ProjectID: projectID, Type: typ, Lim: lim})
+		itemFTS = r
+		return err
+	})
+	g.Go(func() error {
+		r, err := s.St.SearchActivity(gctx, store.SearchActivityParams{Q: q, ProjectID: projectID})
+		actFTS = r
+		return err
+	})
+	if err := g.Wait(); err != nil {
 		return nil, nil, err
 	}
-	acts, err := s.searchActivity(ctx, q, qvec, projectID, actMax)
-	if err != nil {
+
+	// Phase 2: embed only when semantic recall can actually help — the query is
+	// long enough to mean something and lexical came up thin. Shared by both
+	// semantic tiers, and served from the Redis cache when we've seen it before.
+	var qvec *pgvec.Vector
+	if s.wantSemantic(q, len(itemFTS)) {
+		var cached bool
+		qvec, cached = s.embedQuery(ctx, q)
+		if cached {
+			path = "cache"
+		} else {
+			path = "embed"
+		}
+	}
+
+	// Phase 3: finalize both surfaces concurrently (semantic query + RRF merge,
+	// plus the trigram fallback for items when lexical+semantic both whiff).
+	var (
+		items []dto.Item
+		tiers tierHits
+		acts  []dto.Activity
+	)
+	g2, g2ctx := errgroup.WithContext(ctx)
+	g2.Go(func() error {
+		var err error
+		items, tiers, err = s.finalizeItems(g2ctx, q, itemFTS, qvec, projectID, typ, lim, itemMax)
+		return err
+	})
+	g2.Go(func() error {
+		var err error
+		acts, err = s.finalizeActivity(g2ctx, actFTS, qvec, projectID, actMax)
+		return err
+	})
+	if err := g2.Wait(); err != nil {
 		return nil, nil, err
 	}
 	s.logSearch(ctx, auth.Actor(ctx), q, tiers.fts, tiers.semantic, tiers.trigram, len(acts), len(items))
 	return items, acts, nil
+}
+
+// wantSemantic decides whether a query earns the embedding round-trip: it must
+// be embeddable at all, longer than a keystroke fragment, and not already
+// well-answered by lexical search.
+func (s *Service) wantSemantic(q string, ftsHits int) bool {
+	if !s.emb.Enabled() {
+		return false
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(q)) < minSemanticQueryLen {
+		return false
+	}
+	return ftsHits < lazySemanticMinFTS
+}
+
+// embedQuery returns the query vector and whether it was served from the Redis
+// cache (a hit skips the ~1.4s OpenAI round-trip). Best-effort throughout: any
+// failure yields a nil vector and the caller falls back to lexical-only search.
+// The cached flag reflects a real cache hit only — a live embed (or a failure)
+// returns false.
+func (s *Service) embedQuery(ctx context.Context, q string) (*pgvec.Vector, bool) {
+	if vec, ok := s.vcache.get(ctx, q); ok {
+		v := pgvec.New(vec)
+		return &v, true
+	}
+	vecs, err := s.emb.Embed(ctx, []string{q})
+	if err != nil {
+		log.Printf("search: embedding query failed (lexical-only for this query): %v", err)
+		return nil, false
+	}
+	if len(vecs) != 1 {
+		return nil, false
+	}
+	s.vcache.set(ctx, q, vecs[0])
+	v := pgvec.New(vecs[0])
+	return &v, false
 }
 
 // tierHits counts how many results each recall tier contributed to a search —
@@ -382,12 +502,11 @@ type tierHits struct {
 // FLIGHTDECK_SEMANTIC_MAX_DISTANCE.
 var semanticMaxDistance = envFloat("FLIGHTDECK_SEMANTIC_MAX_DISTANCE", 0.6)
 
-func (s *Service) searchItems(ctx context.Context, q string, qvec *pgvec.Vector, projectID pgtype.UUID, typ *string, lim *int32, maxBody int) ([]dto.Item, tierHits, error) {
+// finalizeItems augments the already-fetched item FTS rows with semantic recall
+// (when a query vector is present) via RRF, falling back to trigram fuzzy match
+// only when lexical and semantic both return nothing.
+func (s *Service) finalizeItems(ctx context.Context, q string, fts []store.SearchItemsRow, qvec *pgvec.Vector, projectID pgtype.UUID, typ *string, lim *int32, maxBody int) ([]dto.Item, tierHits, error) {
 	var tiers tierHits
-	fts, err := s.St.SearchItems(ctx, store.SearchItemsParams{Q: q, ProjectID: projectID, Type: typ, Lim: lim})
-	if err != nil {
-		return nil, tiers, err
-	}
 	tiers.fts = len(fts)
 	var sem []dto.Item
 	if qvec != nil {
@@ -418,11 +537,9 @@ func (s *Service) searchItems(ctx context.Context, q string, qvec *pgvec.Vector,
 	return dto.ToFuzzyItemsTrunc(fz, maxBody), tiers, nil
 }
 
-func (s *Service) searchActivity(ctx context.Context, q string, qvec *pgvec.Vector, projectID pgtype.UUID, maxBody int) ([]dto.Activity, error) {
-	fts, err := s.St.SearchActivity(ctx, store.SearchActivityParams{Q: q, ProjectID: projectID})
-	if err != nil {
-		return nil, err
-	}
+// finalizeActivity augments the already-fetched activity FTS rows with semantic
+// recall (when a query vector is present) via RRF.
+func (s *Service) finalizeActivity(ctx context.Context, fts []store.SearchActivityRow, qvec *pgvec.Vector, projectID pgtype.UUID, maxBody int) ([]dto.Activity, error) {
 	var sem []dto.Activity
 	if qvec != nil {
 		rows, err := s.St.SearchActivitySemantic(ctx, store.SearchActivitySemanticParams{
@@ -484,17 +601,26 @@ func capLen[T any](list []T, lim *int32) []T {
 	return list
 }
 
-// BulkCreateItems creates several items in one call (each via CreateItem, so
-// activity + outbox + idempotency all apply). Returns the created items; on the
-// first failure it returns what succeeded plus the error.
+// BulkCreateItems creates several items in a SINGLE transaction (each with its
+// activity + outbox event + idempotency check). Atomic: if any item fails the
+// whole batch rolls back and no items are created, rather than leaving a partial
+// commit. One round trip instead of N.
 func (s *Service) BulkCreateItems(ctx context.Context, ps []store.CreateItemParams, actor string) ([]store.Item, error) {
 	out := make([]store.Item, 0, len(ps))
-	for _, p := range ps {
-		item, err := s.CreateItem(ctx, p, actor)
-		if err != nil {
-			return out, err
+	err := s.St.WithTx(ctx, func(q *store.Queries) error {
+		out = out[:0] // reset in case the tx body ever re-runs
+		for _, p := range ps {
+			item, err := s.createItemTx(ctx, q, p, actor)
+			if err != nil {
+				return err
+			}
+			out = append(out, item)
 		}
-		out = append(out, item)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
+	s.cache.clear()
 	return out, nil
 }

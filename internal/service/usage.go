@@ -91,6 +91,7 @@ func (s *Service) UsageReport(ctx context.Context, days int, knownTools []string
 		errsRows []store.RecentToolErrorsRow
 		search   store.SearchUsageSummaryRow
 		zeroQs   []store.RecentZeroResultSearchesRow
+		coverage store.EmbeddingCoverageRow
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) { stats, err = s.St.ToolCallStats(gctx, since); return })
@@ -99,6 +100,7 @@ func (s *Service) UsageReport(ctx context.Context, days int, knownTools []string
 	g.Go(func() (err error) { errsRows, err = s.St.RecentToolErrors(gctx, since); return })
 	g.Go(func() (err error) { search, err = s.St.SearchUsageSummary(gctx, since); return })
 	g.Go(func() (err error) { zeroQs, err = s.St.RecentZeroResultSearches(gctx, since); return })
+	g.Go(func() (err error) { coverage, err = s.St.EmbeddingCoverage(gctx); return })
 	if err := g.Wait(); err != nil {
 		return dto.UsageReport{}, err
 	}
@@ -148,6 +150,13 @@ func (s *Service) UsageReport(ctx context.Context, days int, knownTools []string
 	}
 	for _, z := range zeroQs {
 		rep.Search.ZeroResultQueries = append(rep.Search.ZeroResultQueries, z.Query)
+	}
+	rep.Coverage = dto.EmbeddingCoverage{
+		ItemsTotal:       int(coverage.ItemsTotal),
+		ItemsEmbedded:    int(coverage.ItemsEmbedded),
+		ItemsFailed:      int(coverage.ItemsFailed),
+		ActivityTotal:    int(coverage.ActivityTotal),
+		ActivityEmbedded: int(coverage.ActivityEmbedded),
 	}
 	return rep, nil
 }

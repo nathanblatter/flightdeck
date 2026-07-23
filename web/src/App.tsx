@@ -56,6 +56,11 @@ function KeyGate({ onSet }: { onSet: () => void }) {
   );
 }
 
+// MIN_SEARCH_LEN mirrors the server's FLIGHTDECK_MIN_SEMANTIC_QUERY_LEN (3):
+// shorter queries are keystroke fragments, so the UI shows the plain list
+// instead of routing to /search.
+const MIN_SEARCH_LEN = 3;
+
 // useDebounced returns `value` after it has stayed unchanged for `ms`.
 function useDebounced<T>(value: T, ms: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -87,8 +92,11 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
   // Debounce the search term: a non-empty query routes to /search, whose
   // semantic tier embeds the query via OpenAI when full-text finds nothing —
   // so we wait for a typing pause rather than firing a call per keystroke.
+  // Below MIN_SEARCH_LEN we don't search at all: a 1–2 char fragment ("j", "jo")
+  // can't carry meaning and just burns a round-trip on a zero-result path. This
+  // mirrors the server's FLIGHTDECK_MIN_SEMANTIC_QUERY_LEN embedding guard.
   const debouncedSearch = useDebounced(search.trim(), 300);
-  const searching = debouncedSearch !== "";
+  const searching = debouncedSearch.length >= MIN_SEARCH_LEN;
 
   const itemsQ = useQuery({
     queryKey: ["items", projectFilter, typeFilter, tagFilter, debouncedSearch],

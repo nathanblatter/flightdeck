@@ -68,3 +68,16 @@ LIMIT 10;
 
 -- name: PurgeOldSearchLog :execrows
 DELETE FROM search_log WHERE searched_at < $1;
+
+-- name: EmbeddingCoverage :one
+-- Semantic-tier backfill health: how many live items are embedded vs poison
+-- ('failed'), and the same for high-signal activity (the kinds the embedder
+-- targets). A low embedded fraction means semantic search is starved — no amount
+-- of distance-threshold tuning helps until the backfill catches up.
+SELECT
+  (SELECT count(*) FROM items WHERE deleted_at IS NULL)                                                       AS items_total,
+  (SELECT count(*) FROM items WHERE deleted_at IS NULL AND embedding IS NOT NULL)                             AS items_embedded,
+  (SELECT count(*) FROM items WHERE deleted_at IS NULL AND embedding IS NULL AND embedding_model = 'failed')  AS items_failed,
+  (SELECT count(*) FROM activity WHERE kind IN ('decision','progress','rejected') AND body <> '')             AS activity_total,
+  (SELECT count(*) FROM activity a JOIN activity_embeddings e ON e.activity_id = a.id
+     WHERE a.kind IN ('decision','progress','rejected') AND a.body <> '' AND e.embedding IS NOT NULL)         AS activity_embedded;

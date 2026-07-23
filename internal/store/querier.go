@@ -30,6 +30,11 @@ type Querier interface {
 	DeleteItemLink(ctx context.Context, id uuid.UUID) error
 	DeleteItemRef(ctx context.Context, id uuid.UUID) error
 	DeleteWebhook(ctx context.Context, id uuid.UUID) error
+	// Semantic-tier backfill health: how many live items are embedded vs poison
+	// ('failed'), and the same for high-signal activity (the kinds the embedder
+	// targets). A low embedded fraction means semantic search is starved — no amount
+	// of distance-threshold tuning helps until the backfill catches up.
+	EmbeddingCoverage(ctx context.Context) (EmbeddingCoverageRow, error)
 	// --- durable outbox ---
 	// Called inside the originating write's transaction (transactional outbox).
 	EnqueueWebhookEvent(ctx context.Context, arg EnqueueWebhookEventParams) (WebhookEvent, error)

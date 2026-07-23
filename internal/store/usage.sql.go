@@ -46,6 +46,41 @@ func (q *Queries) DailyToolCalls(ctx context.Context, calledAt time.Time) ([]Dai
 	return items, nil
 }
 
+const embeddingCoverage = `-- name: EmbeddingCoverage :one
+SELECT
+  (SELECT count(*) FROM items WHERE deleted_at IS NULL)                                                       AS items_total,
+  (SELECT count(*) FROM items WHERE deleted_at IS NULL AND embedding IS NOT NULL)                             AS items_embedded,
+  (SELECT count(*) FROM items WHERE deleted_at IS NULL AND embedding IS NULL AND embedding_model = 'failed')  AS items_failed,
+  (SELECT count(*) FROM activity WHERE kind IN ('decision','progress','rejected') AND body <> '')             AS activity_total,
+  (SELECT count(*) FROM activity a JOIN activity_embeddings e ON e.activity_id = a.id
+     WHERE a.kind IN ('decision','progress','rejected') AND a.body <> '' AND e.embedding IS NOT NULL)         AS activity_embedded
+`
+
+type EmbeddingCoverageRow struct {
+	ItemsTotal       int64 `json:"items_total"`
+	ItemsEmbedded    int64 `json:"items_embedded"`
+	ItemsFailed      int64 `json:"items_failed"`
+	ActivityTotal    int64 `json:"activity_total"`
+	ActivityEmbedded int64 `json:"activity_embedded"`
+}
+
+// Semantic-tier backfill health: how many live items are embedded vs poison
+// ('failed'), and the same for high-signal activity (the kinds the embedder
+// targets). A low embedded fraction means semantic search is starved — no amount
+// of distance-threshold tuning helps until the backfill catches up.
+func (q *Queries) EmbeddingCoverage(ctx context.Context) (EmbeddingCoverageRow, error) {
+	row := q.db.QueryRow(ctx, embeddingCoverage)
+	var i EmbeddingCoverageRow
+	err := row.Scan(
+		&i.ItemsTotal,
+		&i.ItemsEmbedded,
+		&i.ItemsFailed,
+		&i.ActivityTotal,
+		&i.ActivityEmbedded,
+	)
+	return i, err
+}
+
 const insertSearchLog = `-- name: InsertSearchLog :exec
 INSERT INTO search_log (actor, query, fts_hits, semantic_hits, trigram_hits, activity_hits, returned)
 VALUES ($1, $2, $3, $4, $5, $6, $7)

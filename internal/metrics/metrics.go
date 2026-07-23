@@ -49,7 +49,8 @@ var (
 	httpDur = &metric{name: "flightdeck_http_request_duration_seconds", help: "HTTP request latency by route.", hists: map[string]*hist{}}
 	mcpReq  = &metric{name: "flightdeck_mcp_tool_calls_total", help: "MCP tool calls by tool and result.", counters: map[string]uint64{}}
 	mcpDur  = &metric{name: "flightdeck_mcp_tool_duration_seconds", help: "MCP tool latency by tool.", hists: map[string]*hist{}}
-	all     = []*metric{httpReq, httpDur, mcpReq, mcpDur}
+	srchDur = &metric{name: "flightdeck_search_duration_seconds", help: "Search latency by recall path (lexical|cache|embed).", hists: map[string]*hist{}}
+	all     = []*metric{httpReq, httpDur, mcpReq, mcpDur, srchDur}
 )
 
 // HTTP records one served request.
@@ -66,6 +67,14 @@ func MCP(tool string, ok bool, d time.Duration) {
 	}
 	mcpReq.incr(fmt.Sprintf(`tool=%q,result=%q`, tool, result))
 	mcpDur.observe(fmt.Sprintf(`tool=%q`, tool), d)
+}
+
+// Search records one search, labeled by the recall path that determined its
+// latency: "lexical" (no embed — fast path), "cache" (query vector served from
+// Redis, no OpenAI call), or "embed" (paid the live OpenAI embedding round-trip).
+// This is what tells a lazy-skip from a cache hit from a genuine embed.
+func Search(path string, d time.Duration) {
+	srchDur.observe(fmt.Sprintf(`path=%q`, path), d)
 }
 
 func (m *metric) incr(labels string) {
