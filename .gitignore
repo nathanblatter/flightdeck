@@ -3,3 +3,5 @@
 web/node_modules/
 web/tsconfig.tsbuildinfo
 .DS_Store
+# local go build of ./cmd/flightdeck
+/flightdeck

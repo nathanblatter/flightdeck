@@ -13,6 +13,7 @@ import (
 
 type Querier interface {
 	ActivityKindCountsSince(ctx context.Context, arg ActivityKindCountsSinceParams) ([]ActivityKindCountsSinceRow, error)
+	CountActiveAPIKeys(ctx context.Context) (int64, error)
 	CountActivitySince(ctx context.Context, arg CountActivitySinceParams) (int64, error)
 	CountDistinctItemsTouchedSince(ctx context.Context, arg CountDistinctItemsTouchedSinceParams) (int64, error)
 	CountItemsByStatus(ctx context.Context) ([]CountItemsByStatusRow, error)
@@ -46,6 +47,7 @@ type Querier interface {
 	GetItemByRef(ctx context.Context, lower string) (Item, error)
 	GetProjectByID(ctx context.Context, id uuid.UUID) (Project, error)
 	GetProjectBySlug(ctx context.Context, slug string) (Project, error)
+	GetSetting(ctx context.Context, key string) (Setting, error)
 	// Upsert so marking a row 'failed' and later embedding it (or vice versa in a
 	// race) never errors.
 	InsertActivityEmbedding(ctx context.Context, arg InsertActivityEmbeddingParams) error
@@ -87,6 +89,7 @@ type Querier interface {
 	ListRecentActivityByProject(ctx context.Context, arg ListRecentActivityByProjectParams) ([]Activity, error)
 	ListRecentDecisionsByProject(ctx context.Context, arg ListRecentDecisionsByProjectParams) ([]Activity, error)
 	ListRejectedByProject(ctx context.Context, arg ListRejectedByProjectParams) ([]Activity, error)
+	ListSettings(ctx context.Context) ([]Setting, error)
 	// in_progress items whose last update is older than the cutoff.
 	ListStaleInProgress(ctx context.Context, updatedAt time.Time) ([]ListStaleInProgressRow, error)
 	// active projects whose latest activity is newer than the last summary refresh.
@@ -155,6 +158,7 @@ type Querier interface {
 	UpdateItem(ctx context.Context, arg UpdateItemParams) (Item, error)
 	UpdateProject(ctx context.Context, arg UpdateProjectParams) (Project, error)
 	UpdateProjectSummary(ctx context.Context, arg UpdateProjectSummaryParams) (Project, error)
+	UpsertSetting(ctx context.Context, arg UpsertSettingParams) error
 }
 
 var _ Querier = (*Queries)(nil)

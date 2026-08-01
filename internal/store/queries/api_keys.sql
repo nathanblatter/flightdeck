@@ -21,6 +21,9 @@ UPDATE api_keys SET key_hash = $2, revoked = false, expires_at = NULL, last_used
 WHERE id = $1
 RETURNING id, name, scopes, created_at, last_used_at, revoked;
 
+-- name: CountActiveAPIKeys :one
+SELECT count(*) FROM api_keys WHERE revoked = false;
+
 -- name: ListAPIKeys :many
 SELECT id, name, scopes, created_at, last_used_at, revoked FROM api_keys
 ORDER BY created_at DESC;

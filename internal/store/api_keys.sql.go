@@ -12,6 +12,17 @@ import (
 	"github.com/google/uuid"
 )
 
+const countActiveAPIKeys = `-- name: CountActiveAPIKeys :one
+SELECT count(*) FROM api_keys WHERE revoked = false
+`
+
+func (q *Queries) CountActiveAPIKeys(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveAPIKeys)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createAPIKey = `-- name: CreateAPIKey :one
 INSERT INTO api_keys (name, key_hash, scopes, expires_at)
 VALUES ($1, $2, $3, $4)

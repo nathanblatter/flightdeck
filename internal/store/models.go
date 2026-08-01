@@ -116,6 +116,12 @@ type SearchLog struct {
 	Returned     int32     `json:"returned"`
 }
 
+type Setting struct {
+	Key       string          `json:"key"`
+	Value     json.RawMessage `json:"value"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
 type ToolCall struct {
 	ID          int64           `json:"id"`
 	CalledAt    time.Time       `json:"called_at"`
