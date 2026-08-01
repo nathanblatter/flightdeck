@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/singleflight"
 
 	"flightdeck/internal/auth"
 	"flightdeck/internal/dto"
@@ -36,18 +38,30 @@ type Service struct {
 	cache  *ttlCache
 	emb    *embed.Client
 	vcache *vecCache
+	sf     singleflight.Group // collapses concurrent identical orient reads
+	hub    *Hub               // in-process pub/sub for live UI (SSE)
+
+	// settings is the atomic snapshot of the settings table (instance name,
+	// feature flags); see ReloadSettings in settings.go.
+	settings atomic.Pointer[instanceSettings]
 }
 
 func New(st *store.Store) *Service {
 	emb := embed.NewFromEnv()
-	return &Service{
+	s := &Service{
 		St:     st,
 		hc:     &http.Client{Timeout: 10 * time.Second},
 		cache:  newTTLCache(3 * time.Second),
 		emb:    emb,
 		vcache: newVecCache(emb.Model()),
+		hub:    NewHub(),
 	}
+	s.ReloadSettings(context.Background())
+	return s
 }
+
+// Hub exposes the live-event bus so the HTTP layer can serve SSE subscribers.
+func (s *Service) Hub() *Hub { return s.hub }
 
 func projectUUID(id uuid.UUID) pgtype.UUID { return pgtype.UUID{Bytes: id, Valid: true} }
 
@@ -199,6 +213,21 @@ func (s *Service) ProjectContext(ctx context.Context, slug string, v Verbosity) 
 	if cached, ok := s.cache.get(key); ok {
 		return cached.(dto.ProjectContext), nil
 	}
+	// Collapse concurrent identical orients (common when several agents start on
+	// the same project at once) into one build; the rest share the result.
+	res, err, _ := s.sf.Do(key, func() (any, error) {
+		if cached, ok := s.cache.get(key); ok { // won a race while queued
+			return cached.(dto.ProjectContext), nil
+		}
+		return s.buildProjectContext(ctx, slug, v, key)
+	})
+	if err != nil {
+		return dto.ProjectContext{}, err
+	}
+	return res.(dto.ProjectContext), nil
+}
+
+func (s *Service) buildProjectContext(ctx context.Context, slug string, v Verbosity, key string) (dto.ProjectContext, error) {
 	p, err := s.St.GetProjectBySlug(ctx, slug)
 	if err != nil {
 		return dto.ProjectContext{}, err
@@ -313,6 +342,19 @@ func (s *Service) GlobalContext(ctx context.Context, v Verbosity) (dto.GlobalCon
 	if cached, ok := s.cache.get(key); ok {
 		return cached.(dto.GlobalContext), nil
 	}
+	res, err, _ := s.sf.Do(key, func() (any, error) {
+		if cached, ok := s.cache.get(key); ok {
+			return cached.(dto.GlobalContext), nil
+		}
+		return s.buildGlobalContext(ctx, v, key)
+	})
+	if err != nil {
+		return dto.GlobalContext{}, err
+	}
+	return res.(dto.GlobalContext), nil
+}
+
+func (s *Service) buildGlobalContext(ctx context.Context, v Verbosity, key string) (dto.GlobalContext, error) {
 	active := "active"
 	projects, err := s.St.ListProjects(ctx, &active)
 	if err != nil {
@@ -388,6 +430,11 @@ var minSemanticQueryLen = int(envFloat("FLIGHTDECK_MIN_SEMANTIC_QUERY_LEN", 3))
 // thin lexical recall pays for semantic. Tunable via
 // FLIGHTDECK_LAZY_SEMANTIC_MIN_FTS.
 var lazySemanticMinFTS = int(envFloat("FLIGHTDECK_LAZY_SEMANTIC_MIN_FTS", 5))
+
+// embedTimeout bounds the live query-embedding call so a slow OpenAI response
+// can't hold a search request open; on timeout search returns lexical results.
+// Tunable via FLIGHTDECK_EMBED_TIMEOUT_MS.
+var embedTimeout = time.Duration(envFloat("FLIGHTDECK_EMBED_TIMEOUT_MS", 800)) * time.Millisecond
 
 func (s *Service) SearchSmart(ctx context.Context, q string, projectID pgtype.UUID, typ *string, lim *int32, itemMax, actMax int) ([]dto.Item, []dto.Activity, error) {
 	// Record which recall path set this query's latency, so the win from lazy
@@ -477,7 +524,11 @@ func (s *Service) embedQuery(ctx context.Context, q string) (*pgvec.Vector, bool
 		v := pgvec.New(vec)
 		return &v, true
 	}
-	vecs, err := s.emb.Embed(ctx, []string{q})
+	// Bound the live embed: a slow OpenAI call must not hold the request open.
+	// On timeout the caller keeps the lexical results already in hand.
+	ectx, cancel := context.WithTimeout(ctx, embedTimeout)
+	defer cancel()
+	vecs, err := s.emb.Embed(ectx, []string{q})
 	if err != nil {
 		log.Printf("search: embedding query failed (lexical-only for this query): %v", err)
 		return nil, false

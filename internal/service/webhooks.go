@@ -39,6 +39,14 @@ func (s *Service) enqueue(ctx context.Context, q *store.Queries, projectID uuid.
 		log.Printf("webhook enqueue marshal (%s): %v", event, err)
 		return nil
 	}
+	// Fan the same payload out to any connected SSE clients for live UI. This
+	// runs inside the originating tx, so on the rare rollback a client may see a
+	// "changed" nudge for a write that didn't land — harmless for an ephemeral
+	// live hint (the client refetches and renders identical state) and not worth
+	// an after-commit hook. Non-blocking, so it never slows the write.
+	if s.hub != nil {
+		s.hub.Broadcast(payload)
+	}
 	_, err = q.EnqueueWebhookEvent(ctx, store.EnqueueWebhookEventParams{
 		ProjectID: pgtype.UUID{Bytes: projectID, Valid: true},
 		Event:     event,

@@ -5,8 +5,10 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"net/http"
@@ -22,6 +24,17 @@ const (
 	ScopeWrite  = "write"
 	ScopeIngest = "ingest"
 )
+
+// NewRawKey generates a high-entropy random key with the given prefix
+// ("fd_" for API keys, "fdsetup_" for one-time setup tokens). Shared by the
+// keygen CLI and the setup wizard endpoint.
+func NewRawKey(prefix string) (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return prefix + base64.RawURLEncoding.EncodeToString(b), nil
+}
 
 // HashKey returns the hex SHA-256 of a raw API key, as stored in key_hash.
 func HashKey(raw string) string {
@@ -92,6 +105,12 @@ func Middleware(st *store.Store, requiredScope string) func(http.Handler) http.H
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw := r.Header.Get("X-API-Key")
+			if raw == "" {
+				// Fallback for browser EventSource, which can't set request
+				// headers — used by the SSE stream. The request logger records
+				// only the path, not the query string, so the key isn't logged.
+				raw = r.URL.Query().Get("api_key")
+			}
 			if raw == "" {
 				unauthorized(w, "missing X-API-Key")
 				return

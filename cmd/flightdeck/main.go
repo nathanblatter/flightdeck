@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
@@ -45,11 +43,14 @@ func main() {
 		case "keys":
 			runKeys(os.Args[2:])
 			return
+		case "up":
+			runUp(os.Args[2:])
+			return
 		case "version", "--version", "-v":
 			fmt.Println(Version)
 			return
 		default:
-			fmt.Fprintf(os.Stderr, "unknown command %q\n\nusage: flightdeck [serve|migrate|keygen|keys|version]\n", os.Args[1])
+			fmt.Fprintf(os.Stderr, "unknown command %q\n\nusage: flightdeck [serve|migrate|keygen|keys|up|version]\n", os.Args[1])
 			os.Exit(2)
 		}
 	}
@@ -91,6 +92,27 @@ func runServe() {
 
 	svc := service.New(st)
 	apiSrv := api.New(st, svc)
+	apiSrv.Version = Version
+
+	// First-run setup: a fresh instance (no keys yet) needs a one-time token so
+	// the SPA wizard can authenticate. `flightdeck up` provides it via env; a
+	// bare `serve` generates one and logs it. Instances that are already set up
+	// (any active key, e.g. every pre-wizard deployment) skip this entirely.
+	if done, err := svc.SetupComplete(ctx); err != nil {
+		log.Fatalf("setup check: %v", err)
+	} else if !done {
+		token := os.Getenv("FLIGHTDECK_SETUP_TOKEN")
+		if token == "" {
+			token, err = auth.NewRawKey("fdsetup_")
+			if err != nil {
+				log.Fatalf("setup token: %v", err)
+			}
+			log.Printf("first-run setup pending — open the UI and paste this setup token: %s", token)
+		} else {
+			log.Printf("first-run setup pending — open the UI and paste the setup token from FLIGHTDECK_SETUP_TOKEN (in the instance .env)")
+		}
+		apiSrv.SetupToken = token
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -115,8 +137,17 @@ func runServe() {
 	mux.Handle("/mcp/", auth.Middleware(st, auth.ScopeWrite)(mcpHandler))
 
 	// Embedded SPA (and /bug-widget.js) at the root. Static assets are public;
-	// the app authenticates its own /api calls with the user's key.
-	mux.Handle("/", web.Handler())
+	// the app authenticates its own /api calls with the user's key. The widget
+	// script honors the bug_widget feature flag so a work instance can turn the
+	// public embed surface off.
+	spa := web.Handler()
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/bug-widget.js" && !svc.Flag(service.FlagBugWidget) {
+			http.NotFound(w, r)
+			return
+		}
+		spa.ServeHTTP(w, r)
+	}))
 
 	srv := &http.Server{
 		Addr:              addr,
@@ -159,6 +190,14 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+// Flush propagates through to the underlying writer so SSE (GET /api/stream)
+// can push events past this logging wrapper.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // withLogging logs method, path, status, latency, and the authenticated actor
@@ -322,9 +361,9 @@ func splitScopes(s string) []string {
 }
 
 func newRawKey() string {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
+	raw, err := auth.NewRawKey("fd_")
+	if err != nil {
 		log.Fatalf("rand: %v", err)
 	}
-	return "fd_" + base64.RawURLEncoding.EncodeToString(b)
+	return raw
 }

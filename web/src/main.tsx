@@ -5,8 +5,11 @@ import { App } from "./App";
 import "./styles.css";
 
 const queryClient = new QueryClient({
+  // SSE (useLiveUpdates) drives freshness by invalidating on server events, so
+  // the stale window is a loose fallback for a dropped stream, not the primary
+  // refresh path.
   defaultOptions: {
-    queries: { staleTime: 5_000, refetchOnWindowFocus: false, retry: false },
+    queries: { staleTime: 30_000, refetchOnWindowFocus: true, retry: false },
   },
 });
 

@@ -7,6 +7,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sync"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
 
@@ -18,6 +20,15 @@ import (
 type Server struct {
 	St  *store.Store
 	Svc *service.Service
+
+	// Version is reported by GET /setup/status (and set from main).
+	Version string
+	// SetupToken authenticates the one-time first-run wizard; empty once an
+	// instance is set up (see setup.go).
+	SetupToken string
+
+	setupMu   sync.Mutex  // serializes setup completion attempts
+	setupDone atomic.Bool // cached "setup finished" — once true, always true
 }
 
 func New(st *store.Store, svc *service.Service) *Server {
@@ -74,6 +85,9 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /webhooks", write(s.createWebhook))
 	mux.Handle("DELETE /webhooks/{id}", write(s.deleteWebhook))
 
+	// live updates (SSE) — the web UI subscribes here instead of polling
+	mux.Handle("GET /stream", read(s.stream))
+
 	// search
 	mux.Handle("GET /search", read(s.search))
 
@@ -85,6 +99,19 @@ func (s *Server) Routes() http.Handler {
 	ingestLimiter := newIPLimiter(1, 10) // ~1 report/sec/IP, burst 10
 	mux.Handle("POST /ingest/bug", corsIngest(ingestLimiter.middleware(ingest(s.ingestBug))))
 	mux.Handle("OPTIONS /ingest/bug", corsIngest(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+
+	// quick capture (Apple Shortcuts / scripts) — same posture as /ingest/bug
+	mux.Handle("POST /ingest/capture", corsIngest(ingestLimiter.middleware(ingest(s.ingestCapture))))
+	mux.Handle("OPTIONS /ingest/capture", corsIngest(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	mux.Handle("GET /ingest/projects", corsIngest(ingestLimiter.middleware(ingest(s.ingestProjects))))
+
+	// first-run setup — status is unauthenticated (the SPA must decide whether
+	// to show the wizard before any key exists); completion needs the one-time
+	// setup token. Post-setup edits go through key-authed /settings.
+	mux.Handle("GET /setup/status", http.HandlerFunc(s.setupStatus))
+	mux.Handle("POST /setup/complete", http.HandlerFunc(s.completeSetup))
+	mux.Handle("GET /settings", read(s.getSettings))
+	mux.Handle("PUT /settings", write(s.putSettings))
 
 	return http.StripPrefix("/api", mux)
 }

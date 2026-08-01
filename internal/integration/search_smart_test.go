@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -61,6 +62,29 @@ func TestSearchSmartLexicalPath(t *testing.T) {
 	if !strings.Contains(buf.String(), `flightdeck_search_duration_seconds`) ||
 		!strings.Contains(buf.String(), `path="lexical"`) {
 		t.Fatalf("search latency metric not recorded; got:\n%s", buf.String())
+	}
+}
+
+// BenchmarkSearchSmartLexical measures the common no-embed search path end to
+// end (FTS + concurrent finalize), so a future change that reintroduces an
+// unconditional embed shows up as a measured regression.
+func BenchmarkSearchSmartLexical(b *testing.B) {
+	st, svc := setup(b)
+	p := mkProject(b, st, "bench")
+	ctx := context.Background()
+	for i := 0; i < 200; i++ {
+		if _, err := svc.CreateItem(ctx, store.CreateItemParams{
+			ProjectID: p.ID, Title: fmt.Sprintf("authentication task %d", i),
+		}, "bench"); err != nil {
+			b.Fatalf("seed: %v", err)
+		}
+	}
+	proj := pgtype.UUID{Bytes: p.ID, Valid: true}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, _, err := svc.SearchSmart(ctx, "authentication", proj, nil, nil, 0, 0); err != nil {
+			b.Fatalf("search: %v", err)
+		}
 	}
 }
 

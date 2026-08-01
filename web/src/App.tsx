@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   api,
   getApiKey,
   setApiKey,
   clearApiKey,
+  setupStatus,
   type Item,
   type Project,
 } from "./api";
+import { SetupWizard } from "./components/SetupWizard";
 import { Board } from "./components/Board";
 import { ActivityFeed } from "./components/ActivityFeed";
 import { ProjectDrawer } from "./components/ProjectDrawer";
@@ -18,8 +20,34 @@ type View = "board" | "activity";
 
 export function App() {
   const [hasKey, setHasKey] = useState(!!getApiKey());
+  // Setup status is unauthenticated and decides whether to show the first-run
+  // wizard instead of the key gate. It also carries the instance name.
+  const setupQ = useQuery({
+    queryKey: ["setup"],
+    queryFn: setupStatus,
+    staleTime: Infinity,
+    retry: 1,
+  });
+  const instanceName = setupQ.data?.instance_name || "Flightdeck";
+  useEffect(() => {
+    document.title = instanceName;
+  }, [instanceName]);
+
+  if (setupQ.isLoading) return null;
+  if (setupQ.data && !setupQ.data.setup_complete) {
+    return (
+      <SetupWizard
+        onDone={() => {
+          setHasKey(!!getApiKey());
+          void setupQ.refetch();
+        }}
+      />
+    );
+  }
   if (!hasKey) return <KeyGate onSet={() => setHasKey(true)} />;
-  return <Dashboard onSignOut={() => setHasKey(false)} />;
+  return (
+    <Dashboard instanceName={instanceName} onSignOut={() => setHasKey(false)} />
+  );
 }
 
 function KeyGate({ onSet }: { onSet: () => void }) {
@@ -61,6 +89,28 @@ function KeyGate({ onSet }: { onSet: () => void }) {
 // instead of routing to /search.
 const MIN_SEARCH_LEN = 3;
 
+// useLiveUpdates subscribes to the server's SSE stream and invalidates the
+// affected React Query caches on each mutation event, so the board reflects
+// changes live instead of waiting for a poll. EventSource can't set headers, so
+// the API key rides in the query string (the server logs only the path). It
+// auto-reconnects on drop (the server sends a retry hint); on unmount we close
+// it. Query invalidation is coalesced by React Query, so a burst of events
+// triggers at most one refetch per key.
+function useLiveUpdates() {
+  const qc = useQueryClient();
+  useEffect(() => {
+    const key = getApiKey();
+    if (!key) return;
+    const es = new EventSource(`/api/stream?api_key=${encodeURIComponent(key)}`);
+    es.onmessage = () => {
+      for (const k of ["items", "projects", "activity", "context", "links"]) {
+        qc.invalidateQueries({ queryKey: [k] });
+      }
+    };
+    return () => es.close();
+  }, [qc]);
+}
+
 // useDebounced returns `value` after it has stayed unchanged for `ms`.
 function useDebounced<T>(value: T, ms: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -71,7 +121,13 @@ function useDebounced<T>(value: T, ms: number): T {
   return debounced;
 }
 
-function Dashboard({ onSignOut }: { onSignOut: () => void }) {
+function Dashboard({
+  instanceName,
+  onSignOut,
+}: {
+  instanceName: string;
+  onSignOut: () => void;
+}) {
   const [view, setView] = useState<View>("board");
   const [projectFilter, setProjectFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
@@ -80,6 +136,9 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
   const [adding, setAdding] = useState(false);
   const [drawerSlug, setDrawerSlug] = useState<string | null>(null);
   const [linksItem, setLinksItem] = useState<Item | null>(null);
+
+  // Live updates over SSE — pushes replace polling for freshness.
+  useLiveUpdates();
 
   const projectsQ = useQuery({ queryKey: ["projects"], queryFn: api.projects });
   const projects: Project[] = projectsQ.data ?? [];
@@ -137,7 +196,7 @@ function Dashboard({ onSignOut }: { onSignOut: () => void }) {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">🛩 Flightdeck</div>
+        <div className="brand">🛩 {instanceName}</div>
         <nav className="tabs">
           <button
             className={view === "board" ? "active" : ""}

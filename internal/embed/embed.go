@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -23,9 +24,13 @@ const Dims = 1536
 const defaultModel = "text-embedding-3-small"
 
 // Client embeds text via OpenAI. The zero/disabled client is safe to call:
-// Embed returns an error only when Enabled.
+// Embed returns an error only when Enabled. The API key is mutable at runtime
+// (guarded by mu) so a setup wizard can enable semantic search without a
+// restart; the env var, when set, always wins over later SetAPIKey calls.
 type Client struct {
+	mu     sync.RWMutex
 	apiKey string
+	envKey bool // key came from OPENAI_API_KEY; SetAPIKey must not override
 	model  string
 	base   string
 	hc     *http.Client
@@ -43,16 +48,47 @@ func NewFromEnv() *Client {
 	if base == "" {
 		base = "https://api.openai.com/v1"
 	}
+	key := os.Getenv("OPENAI_API_KEY")
 	return &Client{
-		apiKey: os.Getenv("OPENAI_API_KEY"),
+		apiKey: key,
+		envKey: key != "",
 		model:  model,
 		base:   base,
 		hc:     &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
+// SetAPIKey updates the key at runtime (e.g. from the settings table). It is a
+// no-op when the key was configured via OPENAI_API_KEY — env always wins, so
+// env-driven deployments behave exactly as before.
+func (c *Client) SetAPIKey(k string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.envKey {
+		return
+	}
+	c.apiKey = k
+}
+
 // Enabled reports whether an API key is configured.
-func (c *Client) Enabled() bool { return c != nil && c.apiKey != "" }
+func (c *Client) Enabled() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.apiKey != ""
+}
+
+// key returns the current API key under the read lock.
+func (c *Client) key() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.apiKey
+}
 
 // Model returns the configured embedding model name (stored alongside vectors so
 // a later model change can be detected and re-embedded).
@@ -112,7 +148,7 @@ func (c *Client) Embed(ctx context.Context, inputs []string) ([][]float32, error
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Authorization", "Bearer "+c.key())
 
 	resp, err := c.hc.Do(req)
 	if err != nil {

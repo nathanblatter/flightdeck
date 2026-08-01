@@ -34,6 +34,9 @@ type ToolCall struct {
 // never break or slow the call being measured, so errors are logged and the
 // context is detached from the (possibly already finished) request.
 func (s *Service) RecordToolCall(ctx context.Context, c ToolCall) {
+	if !s.Flag(FlagUsageAnalytics) {
+		return
+	}
 	args := c.Args
 	if len(args) > maxRecordedArgs {
 		args = json.RawMessage(fmt.Sprintf(`{"_truncated":true,"_bytes":%d}`, len(c.Args)))

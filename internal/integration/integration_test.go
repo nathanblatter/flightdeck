@@ -19,7 +19,7 @@ import (
 	"flightdeck/internal/store"
 )
 
-func setup(t *testing.T) (*store.Store, *service.Service) {
+func setup(t testing.TB) (*store.Store, *service.Service) {
 	t.Helper()
 	url := os.Getenv("FLIGHTDECK_TEST_DB")
 	if url == "" {
@@ -41,7 +41,7 @@ func setup(t *testing.T) (*store.Store, *service.Service) {
 	return st, service.New(st)
 }
 
-func mkProject(t *testing.T, st *store.Store, slug string) store.Project {
+func mkProject(t testing.TB, st *store.Store, slug string) store.Project {
 	t.Helper()
 	p, err := st.CreateProject(context.Background(), store.CreateProjectParams{Slug: slug, Name: slug})
 	if err != nil {
@@ -50,7 +50,7 @@ func mkProject(t *testing.T, st *store.Store, slug string) store.Project {
 	return p
 }
 
-func countRows(t *testing.T, st *store.Store, sql string, args ...any) int {
+func countRows(t testing.TB, st *store.Store, sql string, args ...any) int {
 	t.Helper()
 	var n int
 	if err := st.Pool.QueryRow(context.Background(), sql, args...).Scan(&n); err != nil {

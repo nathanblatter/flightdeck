@@ -183,6 +183,55 @@ export interface ItemFilters {
   q?: string;
 }
 
+// --- first-run setup (see internal/api/setup.go) ---
+
+export interface SetupStatus {
+  setup_complete: boolean;
+  instance_name: string;
+  version: string;
+}
+
+export interface MintedKey {
+  name: string;
+  scopes: string[];
+  key: string; // raw secret, shown once
+}
+
+// Unauthenticated: the SPA must know whether to show the wizard before any key
+// exists.
+export async function setupStatus(): Promise<SetupStatus> {
+  const res = await fetch("/api/setup/status");
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+  return (await res.json()) as SetupStatus;
+}
+
+export async function completeSetup(
+  token: string,
+  body: {
+    instance_name: string;
+    openai_api_key?: string;
+    flags?: Record<string, boolean>;
+    keys: { name: string; scopes: string[] }[];
+  },
+): Promise<{ keys: MintedKey[] }> {
+  const res = await fetch("/api/setup/complete", {
+    method: "POST",
+    headers: { "X-Setup-Token": token, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j.error) msg = j.error;
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(res.status, msg);
+  }
+  return (await res.json()) as { keys: MintedKey[] };
+}
+
 export const api = {
   projects: () => req<Project[]>("GET", "/projects"),
   items: (f: ItemFilters = {}) =>

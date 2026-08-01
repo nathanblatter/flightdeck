@@ -528,3 +528,70 @@ textarea {
   border-radius: 8px;
   padding: 10px;
 }
+
+/* first-run setup wizard */
+.gate-card.wizard {
+  width: 560px;
+  max-width: 92vw;
+  max-height: 88vh;
+  overflow-y: auto;
+}
+.wizard-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+}
+.wizard-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.wizard-error {
+  color: var(--danger, #e5534b);
+  margin: 0;
+  font-size: 13px;
+}
+.wizard-key {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wizard-key-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wizard-key-row code {
+  flex: 1;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: 12px;
+  background: var(--panel-2);
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+.wizard-h2 {
+  margin: 8px 0 0;
+  font-size: 16px;
+}
+.wizard-snippet summary {
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wizard-snippet pre {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.5;
+}

@@ -97,6 +97,98 @@ func bugTitle(msg string) string {
 	return title
 }
 
+// captureReq is the quick-capture payload (Apple Shortcuts, scripts): file a
+// backlog item of any type into a project with one POST. Deliberately close to
+// the bug widget's posture (ingest scope, CORS, rate-limited) but generalized —
+// the widget endpoint above stays untouched because deployed embeds depend on
+// its exact semantics.
+type captureReq struct {
+	Project  string   `json:"project"`
+	Type     string   `json:"type"`
+	Title    string   `json:"title"`
+	Body     string   `json:"body"`
+	Priority string   `json:"priority"`
+	Tags     []string `json:"tags"`
+}
+
+var captureTypes = map[string]bool{"task": true, "bug": true, "idea": true, "note": true}
+
+func (s *Server) ingestCapture(w http.ResponseWriter, r *http.Request) {
+	var req captureReq
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.Title = strings.TrimSpace(req.Title)
+	if req.Project == "" || req.Title == "" {
+		writeError(w, http.StatusBadRequest, "project and title are required")
+		return
+	}
+	if len(req.Title) > maxBugMessageLen || len(req.Body) > maxBugMessageLen {
+		writeError(w, http.StatusBadRequest, "title or body too long")
+		return
+	}
+	typ := req.Type
+	if typ == "" {
+		typ = "task"
+	}
+	if !captureTypes[typ] {
+		writeError(w, http.StatusBadRequest, "type must be one of task, bug, idea, note")
+		return
+	}
+	priority := severityToPriority(req.Priority) // reuse: maps ""→med, low/high/urgent pass through
+
+	project, err := s.St.GetProjectBySlug(r.Context(), req.Project)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+
+	title := bugTitle(req.Title) // rune-safe 80-char truncation
+	source := "capture"
+	var body *string
+	if req.Body != "" {
+		body = &req.Body
+	} else if title != req.Title {
+		body = &req.Title // preserve the full text when the title was truncated
+	}
+	tags := req.Tags
+	if len(tags) == 0 {
+		tags = []string{"captured"}
+	}
+
+	item, err := s.Svc.CreateItem(r.Context(), store.CreateItemParams{
+		ProjectID: project.ID,
+		Type:      &typ,
+		Title:     title,
+		Body:      body,
+		Priority:  &priority,
+		Source:    &source,
+		Tags:      tags,
+	}, auth.Actor(r.Context()))
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, dto.ToItem(item))
+}
+
+// ingestProjects returns active project slugs as a flat string array — the
+// shape Shortcuts' "Choose from List" consumes without any unpacking actions.
+func (s *Server) ingestProjects(w http.ResponseWriter, r *http.Request) {
+	active := "active"
+	projects, err := s.St.ListProjects(r.Context(), &active)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+	slugs := make([]string, 0, len(projects))
+	for _, p := range projects {
+		slugs = append(slugs, p.Slug)
+	}
+	writeJSON(w, http.StatusOK, slugs)
+}
+
 // buildBugMetadata merges the reporter-supplied meta with the source url/severity.
 func buildBugMetadata(rep bugReport) json.RawMessage {
 	m := map[string]any{}
