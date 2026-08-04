@@ -10,6 +10,34 @@ import (
 	"time"
 )
 
+const listPurgeableAttachmentKeys = `-- name: ListPurgeableAttachmentKeys :many
+SELECT a.object_key FROM attachments a
+JOIN items i ON i.id = a.item_id
+WHERE i.deleted_at IS NOT NULL AND i.deleted_at < $1
+`
+
+// Object keys owned by items about to be hard-deleted, so the maintenance
+// sweep can remove the blobs before the rows cascade away.
+func (q *Queries) ListPurgeableAttachmentKeys(ctx context.Context, deletedAt *time.Time) ([]string, error) {
+	rows, err := q.db.Query(ctx, listPurgeableAttachmentKeys, deletedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var object_key string
+		if err := rows.Scan(&object_key); err != nil {
+			return nil, err
+		}
+		items = append(items, object_key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const purgeOldActivity = `-- name: PurgeOldActivity :execrows
 DELETE FROM activity
 WHERE kind IN ('comment', 'created') AND created_at < $1

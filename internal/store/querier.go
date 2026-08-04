@@ -88,6 +88,9 @@ type Querier interface {
 	ListOpenBlockingEdges(ctx context.Context) ([]ListOpenBlockingEdgesRow, error)
 	ListOpenItemsByProject(ctx context.Context, arg ListOpenItemsByProjectParams) ([]Item, error)
 	ListProjects(ctx context.Context, status *string) ([]Project, error)
+	// Object keys owned by items about to be hard-deleted, so the maintenance
+	// sweep can remove the blobs before the rows cascade away.
+	ListPurgeableAttachmentKeys(ctx context.Context, deletedAt *time.Time) ([]string, error)
 	// Open items across active projects that are NOT blocked by any open blocker,
 	// ranked for "what should I work on": priority, then in_progress/todo, then age.
 	ListReadyItems(ctx context.Context, arg ListReadyItemsParams) ([]ListReadyItemsRow, error)

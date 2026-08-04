@@ -34,6 +34,19 @@ func (s *Service) RunMaintenance(ctx context.Context) {
 
 func (s *Service) runMaintenanceOnce(ctx context.Context) {
 	now := time.Now()
+	// Remove blobs owned by items about to be hard-deleted — after the purge
+	// the cascade leaves nothing pointing at them.
+	if s.blob != nil {
+		if keys, err := s.St.ListPurgeableAttachmentKeys(ctx, ptrTime(now.Add(-softDeleteRetention))); err != nil {
+			log.Printf("maintenance: list purgeable attachments: %v", err)
+		} else {
+			for _, k := range keys {
+				if err := s.blob.Delete(ctx, k); err != nil {
+					log.Printf("maintenance: delete blob %s: %v", k, err)
+				}
+			}
+		}
+	}
 	if n, err := s.St.PurgeSoftDeletedItems(ctx, ptrTime(now.Add(-softDeleteRetention))); err != nil {
 		log.Printf("maintenance: purge soft-deleted items: %v", err)
 	} else if n > 0 {

@@ -9,3 +9,10 @@ DELETE FROM items WHERE deleted_at IS NOT NULL AND deleted_at < $1;
 -- are the durable "why" an agent reads.
 DELETE FROM activity
 WHERE kind IN ('comment', 'created') AND created_at < $1;
+
+-- name: ListPurgeableAttachmentKeys :many
+-- Object keys owned by items about to be hard-deleted, so the maintenance
+-- sweep can remove the blobs before the rows cascade away.
+SELECT a.object_key FROM attachments a
+JOIN items i ON i.id = a.item_id
+WHERE i.deleted_at IS NOT NULL AND i.deleted_at < $1;
