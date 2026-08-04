@@ -61,6 +61,27 @@ export interface Item {
   blocked_by?: string[];
 }
 
+// Attachment metadata; bytes live in object storage (MinIO). `url` is the
+// key-authed API path that streams the image.
+export interface Attachment {
+  id: string;
+  item_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  bucket?: string;
+  object_key: string;
+  url: string;
+  actor: string;
+  created_at: string;
+}
+
+// attachmentSrc builds an <img>-loadable URL — images can't send the X-API-Key
+// header, so the key rides the query string (same fallback SSE uses).
+export function attachmentSrc(a: Attachment): string {
+  return `${a.url}?api_key=${encodeURIComponent(getApiKey())}`;
+}
+
 export type LinkKind = "blocks" | "relates_to" | "parent_of";
 
 // ItemLink is a directed relationship: from --kind--> to.
@@ -253,6 +274,29 @@ export const api = {
     req<Item>("PATCH", `/items/${id}`, body),
   deleteItem: (id: string) => req<void>("DELETE", `/items/${id}`),
   itemLinks: (id: string) => req<ItemLink[]>("GET", `/items/${id}/links`),
+  itemAttachments: (id: string) =>
+    req<Attachment[]>("GET", `/items/${id}/attachments`),
+  uploadAttachments: async (id: string, files: File[]): Promise<Attachment[]> => {
+    const form = new FormData();
+    for (const f of files) form.append("files", f, f.name || "screenshot.png");
+    const res = await fetch(`/api/items/${id}/attachments`, {
+      method: "POST",
+      headers: { "X-API-Key": getApiKey() },
+      body: form,
+    });
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+        const j = await res.json();
+        if (j.error) msg = j.error;
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(res.status, msg);
+    }
+    return (await res.json()) as Attachment[];
+  },
+  deleteAttachment: (id: string) => req<void>("DELETE", `/attachments/${id}`),
   createLink: (body: { from: string; to: string; kind: LinkKind }) =>
     req<ItemLink>("POST", "/links", body),
   deleteLink: (id: string) => req<void>("DELETE", `/links/${id}`),

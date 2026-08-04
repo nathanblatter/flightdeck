@@ -59,6 +59,12 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("GET /items/{id}/refs", read(s.listItemRefs))
 	mux.Handle("POST /items/{id}/refs", write(s.createItemRef))
 
+	// attachments (screenshots) — blobs live in object storage (MinIO)
+	mux.Handle("GET /items/{id}/attachments", read(s.listItemAttachments))
+	mux.Handle("POST /items/{id}/attachments", write(s.uploadAttachmentsAuthed))
+	mux.Handle("GET /attachments/{id}", read(s.getAttachment))
+	mux.Handle("DELETE /attachments/{id}", write(s.deleteAttachment))
+
 	// item links
 	mux.Handle("POST /links", write(s.createLink))
 	mux.Handle("DELETE /links/{id}", write(s.deleteLink))
@@ -99,6 +105,11 @@ func (s *Server) Routes() http.Handler {
 	ingestLimiter := newIPLimiter(1, 10) // ~1 report/sec/IP, burst 10
 	mux.Handle("POST /ingest/bug", corsIngest(ingestLimiter.middleware(ingest(s.ingestBug))))
 	mux.Handle("OPTIONS /ingest/bug", corsIngest(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+
+	// screenshot upload for a just-filed report — same posture as /ingest/bug,
+	// plus a source + freshness guard (see ingestUploadAttachments)
+	mux.Handle("POST /ingest/attachments/{id}", corsIngest(ingestLimiter.middleware(ingest(s.ingestUploadAttachments))))
+	mux.Handle("OPTIONS /ingest/attachments/{id}", corsIngest(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
 
 	// quick capture (Apple Shortcuts / scripts) — same posture as /ingest/bug
 	mux.Handle("POST /ingest/capture", corsIngest(ingestLimiter.middleware(ingest(s.ingestCapture))))

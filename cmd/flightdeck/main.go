@@ -18,6 +18,7 @@ import (
 
 	"flightdeck/internal/api"
 	"flightdeck/internal/auth"
+	"flightdeck/internal/blob"
 	mcpserver "flightdeck/internal/mcp"
 	"flightdeck/internal/metrics"
 	"flightdeck/internal/service"
@@ -91,6 +92,18 @@ func runServe() {
 	defer st.Close()
 
 	svc := service.New(st)
+
+	// Object storage for screenshot attachments (MinIO / any S3 endpoint).
+	// Optional: without it the instance runs fine, uploads answer 503.
+	if bs, err := blob.NewFromEnv(ctx); err != nil {
+		log.Fatalf("blob store: %v", err)
+	} else if bs != nil {
+		svc.SetBlob(bs)
+		log.Printf("attachments enabled (bucket %s)", bs.Bucket())
+	} else {
+		log.Printf("attachments disabled (FLIGHTDECK_S3_ENDPOINT not set)")
+	}
+
 	apiSrv := api.New(st, svc)
 	apiSrv.Version = Version
 

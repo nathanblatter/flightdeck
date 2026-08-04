@@ -25,6 +25,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"flightdeck/internal/auth"
+	"flightdeck/internal/blob"
 	"flightdeck/internal/dto"
 	"flightdeck/internal/embed"
 	"flightdeck/internal/metrics"
@@ -40,6 +41,7 @@ type Service struct {
 	vcache *vecCache
 	sf     singleflight.Group // collapses concurrent identical orient reads
 	hub    *Hub               // in-process pub/sub for live UI (SSE)
+	blob   blob.Store         // object storage for attachments; nil = disabled
 
 	// settings is the atomic snapshot of the settings table (instance name,
 	// feature flags); see ReloadSettings in settings.go.

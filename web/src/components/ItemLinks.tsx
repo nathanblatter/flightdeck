@@ -1,6 +1,13 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type Item, type ItemLink, type LinkKind } from "../api";
+import {
+  api,
+  attachmentSrc,
+  type Attachment,
+  type Item,
+  type ItemLink,
+  type LinkKind,
+} from "../api";
 import { TYPE_GLYPH } from "../lib";
 
 // How each relationship choice in the add-form maps onto a directed link.
@@ -18,6 +25,105 @@ function phrase(kind: LinkKind, outgoing: boolean): string {
   if (kind === "blocks") return outgoing ? "blocks" : "blocked by";
   if (kind === "parent_of") return outgoing ? "parent of" : "child of";
   return "relates to";
+}
+
+// Screenshots on an item: thumbnail grid + upload (picker or drag-drop) +
+// delete. Blobs stream from /api/attachments/{id} (key-authed).
+function AttachmentsSection({ item }: { item: Item }) {
+  const qc = useQueryClient();
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  const attsQ = useQuery({
+    queryKey: ["attachments", item.id],
+    queryFn: () => api.itemAttachments(item.id),
+  });
+  const invalidate = () =>
+    qc.invalidateQueries({ queryKey: ["attachments", item.id] });
+  const upload = useMutation({
+    mutationFn: (files: File[]) => api.uploadAttachments(item.id, files),
+    onSuccess: invalidate,
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => api.deleteAttachment(id),
+    onSuccess: invalidate,
+  });
+
+  function addFiles(list: FileList | File[]) {
+    const files = Array.from(list).filter((f) => f.type.startsWith("image/"));
+    if (files.length) upload.mutate(files);
+  }
+
+  const atts = attsQ.data ?? [];
+  return (
+    <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        addFiles(e.dataTransfer.files);
+      }}
+    >
+      <p className="section-title">
+        Screenshots
+        <button
+          className="icon-btn"
+          title="Add screenshots"
+          style={{ marginLeft: 8 }}
+          onClick={() => fileInput.current?.click()}
+        >
+          ＋
+        </button>
+      </p>
+      <input
+        ref={fileInput}
+        type="file"
+        accept="image/*"
+        multiple
+        hidden
+        onChange={(e) => {
+          if (e.target.files) addFiles(e.target.files);
+          e.target.value = "";
+        }}
+      />
+      {atts.length === 0 ? (
+        <p className="muted sm">
+          {dragOver
+            ? "Drop images to attach…"
+            : upload.isPending
+              ? "Uploading…"
+              : "None — drop images here or click ＋."}
+        </p>
+      ) : (
+        <div className="att-grid" data-dragover={dragOver || undefined}>
+          {atts.map((a: Attachment) => (
+            <div key={a.id} className="att-thumb" title={a.filename}>
+              <a href={attachmentSrc(a)} target="_blank" rel="noreferrer">
+                <img src={attachmentSrc(a)} alt={a.filename} loading="lazy" />
+              </a>
+              <button
+                className="icon-btn att-x"
+                title="Delete screenshot"
+                onClick={() => remove.mutate(a.id)}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          {upload.isPending && <p className="muted sm">Uploading…</p>}
+        </div>
+      )}
+      {upload.isError && (
+        <p className="muted sm">
+          Upload failed: {(upload.error as Error).message}
+        </p>
+      )}
+    </div>
+  );
 }
 
 export function ItemLinksModal({
@@ -102,6 +208,8 @@ export function ItemLinksModal({
             ✕
           </button>
         </div>
+
+        <AttachmentsSection item={item} />
 
         <div>
           <p className="section-title">Links</p>

@@ -44,6 +44,17 @@ type ApiKey struct {
 	ExpiresAt  *time.Time `json:"expires_at"`
 }
 
+type Attachment struct {
+	ID          uuid.UUID `json:"id"`
+	ItemID      uuid.UUID `json:"item_id"`
+	Filename    string    `json:"filename"`
+	ContentType string    `json:"content_type"`
+	SizeBytes   int64     `json:"size_bytes"`
+	ObjectKey   string    `json:"object_key"`
+	Actor       string    `json:"actor"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 type Item struct {
 	ID                 uuid.UUID       `json:"id"`
 	ProjectID          uuid.UUID       `json:"project_id"`

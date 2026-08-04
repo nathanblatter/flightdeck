@@ -551,7 +551,17 @@ func (h *handlers) getItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in ge
 	if err != nil {
 		return nil, dto.Item{}, err
 	}
-	return nil, dto.ToItem(item), nil
+	out := dto.ToItem(item)
+	// Surface screenshots as their MinIO reference (bucket/object_key) plus the
+	// key-authed API URL, so an agent knows where to fetch the image.
+	if atts, err := h.svc.ListAttachments(ctx, item.ID); err == nil && len(atts) > 0 {
+		bucket := ""
+		if b := h.svc.Blob(); b != nil {
+			bucket = b.Bucket()
+		}
+		out.Attachments = dto.ToAttachments(atts, bucket)
+	}
+	return nil, out, nil
 }
 
 func (h *handlers) createItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in createItemIn) (*mcpsdk.CallToolResult, dto.Item, error) {

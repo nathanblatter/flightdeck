@@ -157,6 +157,15 @@
     ".fd-send:disabled{opacity:.55;cursor:default}" +
     ".fd-msg{margin-right:auto;font-size:12.5px;color:var(--fd-muted)}" +
     ".fd-msg.ok{color:" + t.accent + "}.fd-msg.err{color:#e5484d}" +
+    ".fd-drop{margin-top:2px;border:1.5px dashed var(--fd-border);border-radius:calc(var(--fd-radius) * .6);" +
+      "padding:14px 12px;text-align:center;color:var(--fd-muted);font-size:12.5px;cursor:pointer;" +
+      "transition:border-color .15s ease,background .15s ease}" +
+    ".fd-drop:hover,.fd-drop.fd-over{border-color:var(--fd-accent);background:" + withAlpha(t.accent, 0.06) + ";color:var(--fd-ink)}" +
+    ".fd-thumbs{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}" +
+    ".fd-thumb{position:relative;width:56px;height:56px;border-radius:8px;overflow:hidden;border:1px solid var(--fd-border)}" +
+    ".fd-thumb img{width:100%;height:100%;object-fit:cover;display:block}" +
+    ".fd-thumb button{position:absolute;top:2px;right:2px;width:18px;height:18px;border:0;border-radius:50%;" +
+      "background:rgba(8,10,16,.65);color:#fff;font:700 11px/18px var(--fd-font);cursor:pointer;padding:0;text-align:center}" +
     "@media (prefers-reduced-motion:reduce){.fd-launch,.fd-anim{transition:none;animation:none}}";
 
   function el(tag, attrs, html) {
@@ -209,6 +218,100 @@
     );
     panel.appendChild(sev);
 
+    // --- screenshots: drag & drop anywhere on the panel, paste, or pick ---
+    var MAX_FILES = 4;
+    var MAX_BYTES = 8 * 1024 * 1024;
+    var shots = [];
+
+    panel.appendChild(el("label", null, "Screenshots (optional)"));
+    var drop = el("div", { class: "fd-drop", role: "button", tabindex: "0" },
+      "Drag &amp; drop, paste, or click to add — up to " + MAX_FILES + " images");
+    var picker = el("input", { type: "file", accept: "image/*", multiple: "" });
+    picker.style.display = "none";
+    var thumbs = el("div", { class: "fd-thumbs" });
+    panel.appendChild(drop);
+    panel.appendChild(picker);
+    panel.appendChild(thumbs);
+
+    function say(cls, text) {
+      note.className = "fd-msg" + (cls ? " " + cls : "");
+      note.textContent = text;
+    }
+
+    function renderThumbs() {
+      thumbs.innerHTML = "";
+      shots.forEach(function (f, i) {
+        var d = el("div", { class: "fd-thumb" });
+        var img = el("img", { alt: f.name || "screenshot" });
+        img.src = URL.createObjectURL(f);
+        img.onload = function () { URL.revokeObjectURL(img.src); };
+        var x = el("button", { type: "button", "aria-label": "Remove screenshot" }, "×");
+        x.addEventListener("click", function () {
+          shots.splice(i, 1);
+          renderThumbs();
+        });
+        d.appendChild(img);
+        d.appendChild(x);
+        thumbs.appendChild(d);
+      });
+    }
+
+    function addFiles(list) {
+      for (var i = 0; i < list.length; i++) {
+        var f = list[i];
+        if (!f || !f.type || f.type.indexOf("image/") !== 0) continue;
+        if (shots.length >= MAX_FILES) {
+          say("err", "At most " + MAX_FILES + " screenshots.");
+          break;
+        }
+        if (f.size > MAX_BYTES) {
+          say("err", (f.name || "That image") + " is over 8MB.");
+          continue;
+        }
+        shots.push(f);
+        say("", "");
+      }
+      renderThumbs();
+    }
+
+    drop.addEventListener("click", function () { picker.click(); });
+    drop.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); picker.click(); }
+    });
+    picker.addEventListener("change", function () {
+      addFiles(picker.files);
+      picker.value = "";
+    });
+    ["dragenter", "dragover"].forEach(function (ev) {
+      panel.addEventListener(ev, function (e) {
+        e.preventDefault();
+        drop.classList.add("fd-over");
+      });
+    });
+    panel.addEventListener("dragleave", function (e) {
+      if (!panel.contains(e.relatedTarget)) drop.classList.remove("fd-over");
+    });
+    panel.addEventListener("drop", function (e) {
+      e.preventDefault();
+      drop.classList.remove("fd-over");
+      if (e.dataTransfer && e.dataTransfer.files) addFiles(e.dataTransfer.files);
+    });
+    function onPaste(e) {
+      var items = (e.clipboardData && e.clipboardData.items) || [];
+      var files = [];
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].kind === "file") {
+          var f = items[i].getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length) {
+        e.preventDefault();
+        addFiles(files);
+      }
+    }
+    document.addEventListener("paste", onPaste);
+
     var row = el("div", { class: "fd-row" });
     var note = el("div", { class: "fd-msg" });
     var cancel = el("button", { class: "fd-cancel", type: "button" }, "Cancel");
@@ -223,6 +326,7 @@
     function close() {
       scrim.remove();
       document.removeEventListener("keydown", onKey);
+      document.removeEventListener("paste", onPaste);
     }
     function onKey(e) {
       if (e.key === "Escape") close();
@@ -262,13 +366,33 @@
       })
         .then(function (r) {
           if (!r.ok) throw new Error("HTTP " + r.status);
-          note.className = "fd-msg ok";
-          note.textContent = "Thanks — your report was filed.";
-          setTimeout(close, 1200);
+          if (!shots.length) return null;
+          // Report is filed; now attach the screenshots to it.
+          say("", "Uploading screenshot" + (shots.length > 1 ? "s" : "") + "…");
+          return r.json().then(function (item) {
+            var form = new FormData();
+            shots.forEach(function (f) {
+              form.append("files", f, f.name || "screenshot.png");
+            });
+            return fetch(cfg.base + "/api/ingest/attachments/" + item.id, {
+              method: "POST",
+              headers: { "X-API-Key": cfg.key },
+              body: form,
+            }).catch(function () {
+              return { ok: false }; // report already filed — degrade gracefully
+            });
+          });
+        })
+        .then(function (up) {
+          if (up && !up.ok) {
+            say("ok", "Report filed — but the screenshots couldn't be attached.");
+          } else {
+            say("ok", "Thanks — your report was filed.");
+          }
+          setTimeout(close, 1400);
         })
         .catch(function (err) {
-          note.className = "fd-msg err";
-          note.textContent = "Could not send (" + err.message + ").";
+          say("err", "Could not send (" + err.message + ").");
           send.disabled = false;
         });
     });

@@ -595,3 +595,38 @@ textarea {
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* --- item screenshots (attachments) --- */
+.att-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.att-thumb {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.att-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.att-thumb .att-x {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: rgba(8, 10, 16, 0.65);
+  color: #fff;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  line-height: 18px;
+  font-size: 11px;
+  padding: 0;
+}

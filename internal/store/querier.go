@@ -15,6 +15,7 @@ type Querier interface {
 	ActivityKindCountsSince(ctx context.Context, arg ActivityKindCountsSinceParams) ([]ActivityKindCountsSinceRow, error)
 	CountActiveAPIKeys(ctx context.Context) (int64, error)
 	CountActivitySince(ctx context.Context, arg CountActivitySinceParams) (int64, error)
+	CountAttachmentsForItem(ctx context.Context, itemID uuid.UUID) (int64, error)
 	CountDistinctItemsTouchedSince(ctx context.Context, arg CountDistinctItemsTouchedSinceParams) (int64, error)
 	CountItemsByStatus(ctx context.Context) ([]CountItemsByStatusRow, error)
 	// Single-project status counts — avoids the all-projects full scan when serving
@@ -22,12 +23,14 @@ type Querier interface {
 	CountItemsByStatusForProject(ctx context.Context, projectID uuid.UUID) ([]CountItemsByStatusForProjectRow, error)
 	CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (ApiKey, error)
 	CreateActivity(ctx context.Context, arg CreateActivityParams) (Activity, error)
+	CreateAttachment(ctx context.Context, arg CreateAttachmentParams) (Attachment, error)
 	CreateItem(ctx context.Context, arg CreateItemParams) (Item, error)
 	CreateItemLink(ctx context.Context, arg CreateItemLinkParams) (ItemLink, error)
 	CreateItemRef(ctx context.Context, arg CreateItemRefParams) (ItemRef, error)
 	CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error)
 	CreateWebhook(ctx context.Context, arg CreateWebhookParams) (Webhook, error)
 	DailyToolCalls(ctx context.Context, calledAt time.Time) ([]DailyToolCallsRow, error)
+	DeleteAttachment(ctx context.Context, id uuid.UUID) (Attachment, error)
 	DeleteItemLink(ctx context.Context, id uuid.UUID) error
 	DeleteItemRef(ctx context.Context, id uuid.UUID) error
 	DeleteWebhook(ctx context.Context, id uuid.UUID) error
@@ -40,6 +43,7 @@ type Querier interface {
 	// Called inside the originating write's transaction (transactional outbox).
 	EnqueueWebhookEvent(ctx context.Context, arg EnqueueWebhookEventParams) (WebhookEvent, error)
 	GetAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey, error)
+	GetAttachment(ctx context.Context, id uuid.UUID) (Attachment, error)
 	GetItem(ctx context.Context, id uuid.UUID) (Item, error)
 	// Scoped to the project: idempotency keys are only unique per project, so a
 	// cross-project key reuse must not return another project's item.
@@ -65,6 +69,7 @@ type Querier interface {
 	// search for) that has no embedding yet. Rows with a 'failed' marker are poison
 	// and skipped. Activity is immutable, so there is no re-embed-on-edit path.
 	ListActivityNeedingEmbedding(ctx context.Context, lim int32) ([]ListActivityNeedingEmbeddingRow, error)
+	ListAttachmentsForItem(ctx context.Context, itemID uuid.UUID) ([]Attachment, error)
 	// For a project, the active "blocks" edges: each row means blocked_id is blocked
 	// by blocker_id (whose status is still open). Used to flag non-ready open items.
 	ListBlockingEdgesByProject(ctx context.Context, projectID uuid.UUID) ([]ListBlockingEdgesByProjectRow, error)

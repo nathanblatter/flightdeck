@@ -92,6 +92,9 @@ type Item struct {
 	// the count of criteria not yet satisfied (the contract still owed).
 	AcceptanceCriteria []Criterion `json:"acceptance_criteria,omitempty"`
 	AcceptanceUnmet    int         `json:"acceptance_unmet,omitempty"`
+	// Attachments (screenshots) are populated on single-item fetches only —
+	// list views skip them to avoid an N+1.
+	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
 // Criterion is one definition-of-done checklist entry on an item.

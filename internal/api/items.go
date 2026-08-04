@@ -87,7 +87,15 @@ func (s *Server) getItem(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, dto.ToItem(item))
+	out := dto.ToItem(item)
+	if atts, aerr := s.Svc.ListAttachments(r.Context(), item.ID); aerr == nil && len(atts) > 0 {
+		bucket := ""
+		if b := s.Svc.Blob(); b != nil {
+			bucket = b.Bucket()
+		}
+		out.Attachments = dto.ToAttachments(atts, bucket)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 type createItemReq struct {
