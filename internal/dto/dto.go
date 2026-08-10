@@ -318,11 +318,15 @@ type ProjectContext struct {
 	ActivitiesSinceSummary int       `json:"activities_since_summary"`
 }
 
-// ProjectOverview is one project's slice of the horizontal global view.
+// ProjectOverview is one project's slice of the horizontal global view. Top
+// items are briefs (ref/title/status/priority/type), not full Items: the global
+// view is a map, and an agent drills into a project (get_project_context) or an
+// item (get_item) for bodies — full items here multiplied the payload ~5× for
+// tokens nobody read.
 type ProjectOverview struct {
 	Project  Project        `json:"project"`
 	Counts   map[string]int `json:"counts,omitempty"`
-	TopItems []Item         `json:"top_items"`
+	TopItems []ItemBrief    `json:"top_items"`
 }
 
 // GlobalContext is the "load the map" payload across all active projects.

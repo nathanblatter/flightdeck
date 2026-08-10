@@ -370,15 +370,20 @@ func (s *Service) buildGlobalContext(ctx context.Context, v Verbosity, key strin
 	if err != nil {
 		return dto.GlobalContext{}, err
 	}
-	itemMax, _ := bodyLimits(v)
-	topByProject := make(map[uuid.UUID][]dto.Item, len(projects))
+	topByProject := make(map[uuid.UUID][]dto.ItemBrief, len(projects))
 	for _, r := range rows {
-		topByProject[r.ProjectID] = append(topByProject[r.ProjectID], dto.TopOpenRowToItem(r, itemMax))
+		topByProject[r.ProjectID] = append(topByProject[r.ProjectID], dto.ToItemBrief(dto.TopOpenRowToItem(r, 0)))
 	}
 	out := dto.GlobalContext{Projects: make([]dto.ProjectOverview, 0, len(projects))}
 	for _, p := range projects {
+		proj := dto.ToProject(p)
+		if v == VerbosityCompact {
+			// Instructions are working-in-a-project material, read on the per-project
+			// orient; repeating every project's here dominated the global payload.
+			proj.Instructions = ""
+		}
 		out.Projects = append(out.Projects, dto.ProjectOverview{
-			Project:  dto.ToProject(p),
+			Project:  proj,
 			Counts:   counts[p.ID],
 			TopItems: topByProject[p.ID],
 		})

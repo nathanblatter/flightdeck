@@ -31,8 +31,26 @@ type handlers struct {
 }
 
 // addTool registers a tool and records its name in h.toolNames.
-func addTool[In, Out any](h *handlers, s *mcpsdk.Server, t *mcpsdk.Tool, fn mcpsdk.ToolHandlerFor[In, Out]) {
-	mcpsdk.AddTool(s, t, fn)
+//
+// Handlers return a plain DTO which is marshaled into a single TextContent
+// block. Returning it as the SDK's typed Out would emit the same JSON twice —
+// once as structuredContent and again as the spec-suggested text copy — and
+// hang a generated output schema on every tools/list entry. Skipping both
+// halves the payload of every tool result (usage_report showed
+// get_global_context averaging 85 KB) and keeps the manifest lean; the text
+// JSON is all an agent reads anyway.
+func addTool[In, Out any](h *handlers, s *mcpsdk.Server, t *mcpsdk.Tool, fn func(context.Context, *mcpsdk.CallToolRequest, In) (Out, error)) {
+	mcpsdk.AddTool(s, t, func(ctx context.Context, req *mcpsdk.CallToolRequest, in In) (*mcpsdk.CallToolResult, any, error) {
+		out, err := fn(ctx, req, in)
+		if err != nil {
+			return nil, nil, err
+		}
+		b, err := json.Marshal(out)
+		if err != nil {
+			return nil, nil, err
+		}
+		return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: string(b)}}}, nil, nil
+	})
 	h.toolNames = append(h.toolNames, t.Name)
 }
 
@@ -180,7 +198,7 @@ type slugIn struct {
 }
 
 type globalIn struct {
-	Verbosity *string `json:"verbosity,omitempty" jsonschema:"compact (default) | full"`
+	Verbosity *string `json:"verbosity,omitempty" jsonschema:"compact (default) | full (adds each project's instructions)"`
 }
 
 type searchIn struct {
@@ -437,36 +455,36 @@ func (h *handlers) register(s *mcpsdk.Server) {
 
 // --- tool implementations ---
 
-func (h *handlers) listProjects(ctx context.Context, _ *mcpsdk.CallToolRequest, in listProjectsIn) (*mcpsdk.CallToolResult, projectsOut, error) {
+func (h *handlers) listProjects(ctx context.Context, _ *mcpsdk.CallToolRequest, in listProjectsIn) (projectsOut, error) {
 	projects, err := h.st.ListProjects(ctx, optStr(in.Status))
 	if err != nil {
-		return nil, projectsOut{}, err
+		return projectsOut{}, err
 	}
-	return nil, projectsOut{Projects: dto.ToProjects(projects)}, nil
+	return projectsOut{Projects: dto.ToProjects(projects)}, nil
 }
 
-func (h *handlers) getProjectContext(ctx context.Context, _ *mcpsdk.CallToolRequest, in slugIn) (*mcpsdk.CallToolResult, dto.ProjectContext, error) {
+func (h *handlers) getProjectContext(ctx context.Context, _ *mcpsdk.CallToolRequest, in slugIn) (dto.ProjectContext, error) {
 	bundle, err := h.svc.ProjectContext(ctx, in.Slug, verbosityOf(in.Verbosity))
 	if err != nil {
-		return nil, dto.ProjectContext{}, err
+		return dto.ProjectContext{}, err
 	}
-	return nil, bundle, nil
+	return bundle, nil
 }
 
-func (h *handlers) getGlobalContext(ctx context.Context, _ *mcpsdk.CallToolRequest, in globalIn) (*mcpsdk.CallToolResult, dto.GlobalContext, error) {
+func (h *handlers) getGlobalContext(ctx context.Context, _ *mcpsdk.CallToolRequest, in globalIn) (dto.GlobalContext, error) {
 	bundle, err := h.svc.GlobalContext(ctx, verbosityOf(in.Verbosity))
 	if err != nil {
-		return nil, dto.GlobalContext{}, err
+		return dto.GlobalContext{}, err
 	}
-	return nil, bundle, nil
+	return bundle, nil
 }
 
-func (h *handlers) search(ctx context.Context, _ *mcpsdk.CallToolRequest, in searchIn) (*mcpsdk.CallToolResult, dto.SearchResults, error) {
+func (h *handlers) search(ctx context.Context, _ *mcpsdk.CallToolRequest, in searchIn) (dto.SearchResults, error) {
 	var projectID pgtype.UUID
 	if in.Project != nil && *in.Project != "" {
 		id, err := h.resolveProject(ctx, *in.Project)
 		if err != nil {
-			return nil, dto.SearchResults{}, err
+			return dto.SearchResults{}, err
 		}
 		projectID = pgtype.UUID{Bytes: id, Valid: true}
 	}
@@ -478,21 +496,21 @@ func (h *handlers) search(ctx context.Context, _ *mcpsdk.CallToolRequest, in sea
 	itemMax, actMax := service.BodyLimits(verbosityOf(in.Verbosity))
 	items, acts, err := h.svc.SearchSmart(ctx, in.Query, projectID, optStr(in.Type), lim, itemMax, actMax)
 	if err != nil {
-		return nil, dto.SearchResults{}, err
+		return dto.SearchResults{}, err
 	}
-	return nil, dto.SearchResults{
+	return dto.SearchResults{
 		Query:    in.Query,
 		Items:    items,
 		Activity: acts,
 	}, nil
 }
 
-func (h *handlers) listItems(ctx context.Context, _ *mcpsdk.CallToolRequest, in listItemsIn) (*mcpsdk.CallToolResult, dto.ItemsPage, error) {
+func (h *handlers) listItems(ctx context.Context, _ *mcpsdk.CallToolRequest, in listItemsIn) (dto.ItemsPage, error) {
 	var projectID pgtype.UUID
 	if in.Project != nil && *in.Project != "" {
 		id, err := h.resolveProject(ctx, *in.Project)
 		if err != nil {
-			return nil, dto.ItemsPage{}, err
+			return dto.ItemsPage{}, err
 		}
 		projectID = pgtype.UUID{Bytes: id, Valid: true}
 	}
@@ -500,7 +518,7 @@ func (h *handlers) listItems(ctx context.Context, _ *mcpsdk.CallToolRequest, in 
 	if in.UpdatedSince != nil && *in.UpdatedSince != "" {
 		t, err := time.Parse(time.RFC3339, *in.UpdatedSince)
 		if err != nil {
-			return nil, dto.ItemsPage{}, fmt.Errorf("invalid updated_since: %w", err)
+			return dto.ItemsPage{}, fmt.Errorf("invalid updated_since: %w", err)
 		}
 		since = &t
 	}
@@ -530,7 +548,7 @@ func (h *handlers) listItems(ctx context.Context, _ *mcpsdk.CallToolRequest, in 
 		Off:          &off,
 	})
 	if err != nil {
-		return nil, dto.ItemsPage{}, err
+		return dto.ItemsPage{}, err
 	}
 	var next *int
 	if len(items) > limit {
@@ -539,17 +557,17 @@ func (h *handlers) listItems(ctx context.Context, _ *mcpsdk.CallToolRequest, in 
 		next = &n
 	}
 	itemMax, _ := service.BodyLimits(verbosityOf(in.Verbosity))
-	return nil, dto.ItemsPage{Items: dto.ToItemsTrunc(items, itemMax), NextOffset: next}, nil
+	return dto.ItemsPage{Items: dto.ToItemsTrunc(items, itemMax), NextOffset: next}, nil
 }
 
-func (h *handlers) getItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in getItemIn) (*mcpsdk.CallToolResult, dto.Item, error) {
+func (h *handlers) getItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in getItemIn) (dto.Item, error) {
 	id, err := h.resolveItemRef(ctx, in.ID)
 	if err != nil {
-		return nil, dto.Item{}, err
+		return dto.Item{}, err
 	}
 	item, err := h.st.GetItem(ctx, id)
 	if err != nil {
-		return nil, dto.Item{}, err
+		return dto.Item{}, err
 	}
 	out := dto.ToItem(item)
 	// Surface screenshots as their MinIO reference (bucket/object_key) plus the
@@ -561,16 +579,16 @@ func (h *handlers) getItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in ge
 		}
 		out.Attachments = dto.ToAttachments(atts, bucket)
 	}
-	return nil, out, nil
+	return out, nil
 }
 
-func (h *handlers) createItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in createItemIn) (*mcpsdk.CallToolResult, dto.Item, error) {
+func (h *handlers) createItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in createItemIn) (dto.Item, error) {
 	if err := service.ValidateItemFields(in.Type, in.Status, in.Priority); err != nil {
-		return nil, dto.Item{}, err
+		return dto.Item{}, err
 	}
 	projectID, err := h.resolveProject(ctx, in.Project)
 	if err != nil {
-		return nil, dto.Item{}, err
+		return dto.Item{}, err
 	}
 	source := "agent"
 	item, err := h.svc.CreateItem(ctx, store.CreateItemParams{
@@ -587,24 +605,24 @@ func (h *handlers) createItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		AcceptanceCriteria: criteriaJSON(in.AcceptanceCriteria),
 	}, auth.Actor(ctx))
 	if err != nil {
-		return nil, dto.Item{}, err
+		return dto.Item{}, err
 	}
-	return nil, dto.ToItem(item), nil
+	return dto.ToItem(item), nil
 }
 
-func (h *handlers) createItems(ctx context.Context, _ *mcpsdk.CallToolRequest, in createItemsIn) (*mcpsdk.CallToolResult, createItemsOut, error) {
+func (h *handlers) createItems(ctx context.Context, _ *mcpsdk.CallToolRequest, in createItemsIn) (createItemsOut, error) {
 	if len(in.Items) == 0 {
-		return nil, createItemsOut{}, fmt.Errorf("items is required")
+		return createItemsOut{}, fmt.Errorf("items is required")
 	}
 	params := make([]store.CreateItemParams, 0, len(in.Items))
 	source := "agent"
 	for _, it := range in.Items {
 		if err := service.ValidateItemFields(it.Type, it.Status, it.Priority); err != nil {
-			return nil, createItemsOut{}, err
+			return createItemsOut{}, err
 		}
 		projectID, err := h.resolveProject(ctx, it.Project)
 		if err != nil {
-			return nil, createItemsOut{}, err
+			return createItemsOut{}, err
 		}
 		params = append(params, store.CreateItemParams{
 			ProjectID:          projectID,
@@ -622,18 +640,18 @@ func (h *handlers) createItems(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	}
 	created, err := h.svc.BulkCreateItems(ctx, params, auth.Actor(ctx))
 	if err != nil {
-		return nil, createItemsOut{Items: dto.ToItems(created)}, err
+		return createItemsOut{Items: dto.ToItems(created)}, err
 	}
-	return nil, createItemsOut{Items: dto.ToItems(created)}, nil
+	return createItemsOut{Items: dto.ToItems(created)}, nil
 }
 
-func (h *handlers) updateItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in updateItemIn) (*mcpsdk.CallToolResult, dto.Item, error) {
+func (h *handlers) updateItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in updateItemIn) (dto.Item, error) {
 	if err := service.ValidateItemFields(in.Type, in.Status, in.Priority); err != nil {
-		return nil, dto.Item{}, err
+		return dto.Item{}, err
 	}
 	id, err := h.resolveItemRef(ctx, in.ID)
 	if err != nil {
-		return nil, dto.Item{}, err
+		return dto.Item{}, err
 	}
 	var expectedVersion *int32
 	if in.ExpectedVersion != nil {
@@ -657,27 +675,27 @@ func (h *handlers) updateItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		ExpectedVersion:    expectedVersion,
 	}, auth.Actor(ctx))
 	if err != nil {
-		return nil, dto.Item{}, err
+		return dto.Item{}, err
 	}
-	return nil, dto.ToItem(item), nil
+	return dto.ToItem(item), nil
 }
 
-func (h *handlers) logActivity(ctx context.Context, _ *mcpsdk.CallToolRequest, in logActivityIn) (*mcpsdk.CallToolResult, dto.Activity, error) {
+func (h *handlers) logActivity(ctx context.Context, _ *mcpsdk.CallToolRequest, in logActivityIn) (dto.Activity, error) {
 	if err := service.ValidateActivityKind(&in.Kind); err != nil {
-		return nil, dto.Activity{}, err
+		return dto.Activity{}, err
 	}
 	if err := service.ValidateConfidence(in.Confidence); err != nil {
-		return nil, dto.Activity{}, err
+		return dto.Activity{}, err
 	}
 	projectID, err := h.resolveProject(ctx, in.Project)
 	if err != nil {
-		return nil, dto.Activity{}, err
+		return dto.Activity{}, err
 	}
 	var itemID pgtype.UUID
 	if in.Item != nil && *in.Item != "" {
 		id, err := h.resolveItemRef(ctx, *in.Item)
 		if err != nil {
-			return nil, dto.Activity{}, err
+			return dto.Activity{}, err
 		}
 		itemID = pgtype.UUID{Bytes: id, Valid: true}
 	}
@@ -692,25 +710,25 @@ func (h *handlers) logActivity(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 		Metadata:   metaJSON(in.Metadata),
 	})
 	if err != nil {
-		return nil, dto.Activity{}, err
+		return dto.Activity{}, err
 	}
-	return nil, dto.ToActivity(row), nil
+	return dto.ToActivity(row), nil
 }
 
-func (h *handlers) updateProjectSummary(ctx context.Context, _ *mcpsdk.CallToolRequest, in updateSummaryIn) (*mcpsdk.CallToolResult, dto.Project, error) {
+func (h *handlers) updateProjectSummary(ctx context.Context, _ *mcpsdk.CallToolRequest, in updateSummaryIn) (dto.Project, error) {
 	p, err := h.st.UpdateProjectSummary(ctx, store.UpdateProjectSummaryParams{Slug: in.Slug, Summary: in.Summary})
 	if err != nil {
-		return nil, dto.Project{}, err
+		return dto.Project{}, err
 	}
-	return nil, dto.ToProject(p), nil
+	return dto.ToProject(p), nil
 }
 
-func (h *handlers) createProject(ctx context.Context, _ *mcpsdk.CallToolRequest, in createProjectIn) (*mcpsdk.CallToolResult, dto.Project, error) {
+func (h *handlers) createProject(ctx context.Context, _ *mcpsdk.CallToolRequest, in createProjectIn) (dto.Project, error) {
 	if in.Slug == "" || in.Name == "" {
-		return nil, dto.Project{}, fmt.Errorf("slug and name are required")
+		return dto.Project{}, fmt.Errorf("slug and name are required")
 	}
 	if err := service.ValidateProjectStatus(in.Status); err != nil {
-		return nil, dto.Project{}, err
+		return dto.Project{}, err
 	}
 	p, err := h.st.CreateProject(ctx, store.CreateProjectParams{
 		Slug:         in.Slug,
@@ -723,23 +741,23 @@ func (h *handlers) createProject(ctx context.Context, _ *mcpsdk.CallToolRequest,
 		SiteUrl:      optStr(in.SiteURL),
 	})
 	if err != nil {
-		return nil, dto.Project{}, err
+		return dto.Project{}, err
 	}
-	return nil, dto.ToProject(p), nil
+	return dto.ToProject(p), nil
 }
 
-func (h *handlers) resolveProjectTool(ctx context.Context, _ *mcpsdk.CallToolRequest, in resolveProjectIn) (*mcpsdk.CallToolResult, dto.Project, error) {
+func (h *handlers) resolveProjectTool(ctx context.Context, _ *mcpsdk.CallToolRequest, in resolveProjectIn) (dto.Project, error) {
 	p, err := h.svc.ResolveProject(ctx, in.Path)
 	if err != nil {
-		return nil, dto.Project{}, err
+		return dto.Project{}, err
 	}
-	return nil, dto.ToProject(p), nil
+	return dto.ToProject(p), nil
 }
 
-func (h *handlers) completeItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in completeItemIn) (*mcpsdk.CallToolResult, dto.Item, error) {
+func (h *handlers) completeItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in completeItemIn) (dto.Item, error) {
 	id, err := h.resolveItemRef(ctx, in.Item)
 	if err != nil {
-		return nil, dto.Item{}, err
+		return dto.Item{}, err
 	}
 	var summary string
 	if in.Summary != nil {
@@ -747,56 +765,56 @@ func (h *handlers) completeItem(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 	}
 	item, err := h.svc.CompleteItem(ctx, id, in.Why, summary, auth.Actor(ctx))
 	if err != nil {
-		return nil, dto.Item{}, err
+		return dto.Item{}, err
 	}
-	return nil, dto.ToItem(item), nil
+	return dto.ToItem(item), nil
 }
 
-func (h *handlers) setProjectInstructions(ctx context.Context, _ *mcpsdk.CallToolRequest, in setInstructionsIn) (*mcpsdk.CallToolResult, dto.Project, error) {
+func (h *handlers) setProjectInstructions(ctx context.Context, _ *mcpsdk.CallToolRequest, in setInstructionsIn) (dto.Project, error) {
 	p, err := h.st.SetProjectInstructions(ctx, store.SetProjectInstructionsParams{Slug: in.Slug, Instructions: in.Instructions})
 	if err != nil {
-		return nil, dto.Project{}, err
+		return dto.Project{}, err
 	}
-	return nil, dto.ToProject(p), nil
+	return dto.ToProject(p), nil
 }
 
-func (h *handlers) linkItems(ctx context.Context, _ *mcpsdk.CallToolRequest, in linkItemsIn) (*mcpsdk.CallToolResult, linkOut, error) {
+func (h *handlers) linkItems(ctx context.Context, _ *mcpsdk.CallToolRequest, in linkItemsIn) (linkOut, error) {
 	if err := service.ValidateLinkKind(&in.Kind); err != nil {
-		return nil, linkOut{}, err
+		return linkOut{}, err
 	}
 	from, err := h.resolveItemRef(ctx, in.From)
 	if err != nil {
-		return nil, linkOut{}, err
+		return linkOut{}, err
 	}
 	to, err := h.resolveItemRef(ctx, in.To)
 	if err != nil {
-		return nil, linkOut{}, err
+		return linkOut{}, err
 	}
 	link, err := h.svc.LinkItems(ctx, from, to, in.Kind)
 	if err != nil {
-		return nil, linkOut{}, err
+		return linkOut{}, err
 	}
-	return nil, linkOut{Link: dto.ToItemLink(link)}, nil
+	return linkOut{Link: dto.ToItemLink(link)}, nil
 }
 
-func (h *handlers) unlinkItems(ctx context.Context, _ *mcpsdk.CallToolRequest, in unlinkItemsIn) (*mcpsdk.CallToolResult, okOut, error) {
+func (h *handlers) unlinkItems(ctx context.Context, _ *mcpsdk.CallToolRequest, in unlinkItemsIn) (okOut, error) {
 	id, err := uuid.Parse(in.ID)
 	if err != nil {
-		return nil, okOut{}, fmt.Errorf("invalid id: %w", err)
+		return okOut{}, fmt.Errorf("invalid id: %w", err)
 	}
 	if err := h.svc.DeleteLink(ctx, id); err != nil {
-		return nil, okOut{}, err
+		return okOut{}, err
 	}
-	return nil, okOut{OK: true}, nil
+	return okOut{OK: true}, nil
 }
 
-func (h *handlers) addItemRef(ctx context.Context, _ *mcpsdk.CallToolRequest, in addRefIn) (*mcpsdk.CallToolResult, refOut, error) {
+func (h *handlers) addItemRef(ctx context.Context, _ *mcpsdk.CallToolRequest, in addRefIn) (refOut, error) {
 	if err := service.ValidateRefKind(in.Kind); err != nil {
-		return nil, refOut{}, err
+		return refOut{}, err
 	}
 	id, err := h.resolveItemRef(ctx, in.Item)
 	if err != nil {
-		return nil, refOut{}, err
+		return refOut{}, err
 	}
 	var kind, label string
 	if in.Kind != nil {
@@ -807,31 +825,31 @@ func (h *handlers) addItemRef(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	}
 	ref, err := h.svc.AddItemRef(ctx, id, kind, in.Ref, label)
 	if err != nil {
-		return nil, refOut{}, err
+		return refOut{}, err
 	}
-	return nil, refOut{Ref: dto.ToItemRef(ref)}, nil
+	return refOut{Ref: dto.ToItemRef(ref)}, nil
 }
 
-func (h *handlers) listItemRefs(ctx context.Context, _ *mcpsdk.CallToolRequest, in listRefsIn) (*mcpsdk.CallToolResult, refsOut, error) {
+func (h *handlers) listItemRefs(ctx context.Context, _ *mcpsdk.CallToolRequest, in listRefsIn) (refsOut, error) {
 	id, err := h.resolveItemRef(ctx, in.Item)
 	if err != nil {
-		return nil, refsOut{}, err
+		return refsOut{}, err
 	}
 	refs, err := h.svc.ListItemRefs(ctx, id)
 	if err != nil {
-		return nil, refsOut{}, err
+		return refsOut{}, err
 	}
-	return nil, refsOut{Refs: dto.ToItemRefs(refs)}, nil
+	return refsOut{Refs: dto.ToItemRefs(refs)}, nil
 }
 
-func (h *handlers) usageReport(ctx context.Context, _ *mcpsdk.CallToolRequest, in usageReportIn) (*mcpsdk.CallToolResult, dto.UsageReport, error) {
+func (h *handlers) usageReport(ctx context.Context, _ *mcpsdk.CallToolRequest, in usageReportIn) (dto.UsageReport, error) {
 	days := 7
 	if in.Days != nil {
 		days = *in.Days
 	}
 	rep, err := h.svc.UsageReport(ctx, days, h.toolNames)
 	if err != nil {
-		return nil, dto.UsageReport{}, err
+		return dto.UsageReport{}, err
 	}
-	return nil, rep, nil
+	return rep, nil
 }
