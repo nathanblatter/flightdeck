@@ -102,17 +102,17 @@ func (s *Server) uploadAttachments(w http.ResponseWriter, r *http.Request, item 
 			return
 		}
 		if part.FormName() != "files" || part.FileName() == "" {
-			part.Close()
+			_ = part.Close()
 			continue
 		}
 		files++
 		if files > maxAttachmentFiles {
-			part.Close()
+			_ = part.Close()
 			writeError(w, http.StatusBadRequest, "at most "+strconv.Itoa(maxAttachmentFiles)+" files per request")
 			return
 		}
 		att, herr := s.saveAttachmentPart(r, item, part, actor)
-		part.Close()
+		_ = part.Close()
 		if herr != nil {
 			herr.write(w)
 			return

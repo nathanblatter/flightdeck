@@ -31,7 +31,9 @@ func multipartUpload(t *testing.T, url, key string, files map[string][]byte) (*h
 			t.Fatalf("write part: %v", err)
 		}
 	}
-	mw.Close()
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart: %v", err)
+	}
 	req, err := http.NewRequest(http.MethodPost, url, &buf)
 	if err != nil {
 		t.Fatalf("request: %v", err)
@@ -43,7 +45,7 @@ func multipartUpload(t *testing.T, url, key string, files map[string][]byte) (*h
 		t.Fatalf("do: %v", err)
 	}
 	body, _ := io.ReadAll(res.Body)
-	res.Body.Close()
+	_ = res.Body.Close()
 	return res, body
 }
 
@@ -109,7 +111,7 @@ func TestIngestAttachmentsFlow(t *testing.T) {
 		t.Fatalf("get blob: %v", err)
 	}
 	blobBody, _ := io.ReadAll(blobRes.Body)
-	blobRes.Body.Close()
+	_ = blobRes.Body.Close()
 	if blobRes.StatusCode != http.StatusOK || !bytes.Equal(blobBody, pngBytes) {
 		t.Fatalf("blob roundtrip: %d, %d bytes", blobRes.StatusCode, len(blobBody))
 	}
@@ -143,7 +145,7 @@ func TestIngestAttachmentsFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	delRes.Body.Close()
+	_ = delRes.Body.Close()
 	if delRes.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete: %d, want 204", delRes.StatusCode)
 	}

@@ -185,7 +185,7 @@ func TestSetupFlow(t *testing.T) {
 	}
 
 	// status now complete with the instance name; second complete → 410
-	resp, body = doJSON(t, "GET", ts.URL+"/api/setup/status", "", nil, nil)
+	_, body = doJSON(t, "GET", ts.URL+"/api/setup/status", "", nil, nil)
 	if json.Unmarshal(body, &status) != nil || !status.SetupComplete || status.InstanceName != "Flightdeck @ Test" {
 		t.Fatalf("expected complete setup with name, got %s", body)
 	}

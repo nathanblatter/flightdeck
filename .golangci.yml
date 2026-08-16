@@ -1,0 +1,24 @@
+version: "2"
+
+linters:
+  # Standard set (errcheck, govet, ineffassign, staticcheck, unused) plus a few
+  # cheap, low-noise extras.
+  default: standard
+  enable:
+    - misspell
+    - unconvert
+    - nolintlint
+  settings:
+    errcheck:
+      exclude-functions:
+        # Writes to http.ResponseWriter / SSE streams — the error is the
+        # client hanging up, and there's nothing to do about it.
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+  exclusions:
+    rules:
+      # `defer x.Close()` / `defer tx.Rollback(ctx)` cleanup where the error
+      # is uninteresting by construction.
+      - linters: [errcheck]
+        source: 'defer .*\.(Close|Rollback)\('

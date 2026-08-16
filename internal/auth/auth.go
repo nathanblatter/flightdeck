@@ -7,9 +7,9 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -51,8 +51,9 @@ type Identity struct {
 }
 
 func (id Identity) HasScope(scope string) bool {
+	// Plain comparison: scope names are public constants, not secrets.
 	for _, s := range id.Scopes {
-		if subtle.ConstantTimeCompare([]byte(s), []byte(scope)) == 1 {
+		if s == scope {
 			return true
 		}
 	}
@@ -121,7 +122,7 @@ func Middleware(st *store.Store, requiredScope string) func(http.Handler) http.H
 					unauthorized(w, "invalid API key")
 					return
 				}
-				http.Error(w, `{"error":"auth lookup failed"}`, http.StatusInternalServerError)
+				writeAuthError(w, http.StatusInternalServerError, "auth lookup failed")
 				return
 			}
 			id := Identity{Name: key.Name, Scopes: key.Scopes}
@@ -143,13 +144,15 @@ func Middleware(st *store.Store, requiredScope string) func(http.Handler) http.H
 }
 
 func unauthorized(w http.ResponseWriter, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
-	_, _ = w.Write([]byte(`{"error":"` + msg + `"}`))
+	writeAuthError(w, http.StatusUnauthorized, msg)
 }
 
 func forbidden(w http.ResponseWriter, msg string) {
+	writeAuthError(w, http.StatusForbidden, msg)
+}
+
+func writeAuthError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	_, _ = w.Write([]byte(`{"error":"` + msg + `"}`))
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }

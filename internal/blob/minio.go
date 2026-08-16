@@ -71,7 +71,7 @@ func (m *MinIO) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 	// GetObject is lazy; surface a missing object as an error now so the API
 	// can 404 instead of failing mid-stream.
 	if _, err := obj.Stat(); err != nil {
-		obj.Close()
+		_ = obj.Close()
 		return nil, err
 	}
 	return obj, nil

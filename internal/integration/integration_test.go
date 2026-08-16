@@ -50,6 +50,15 @@ func mkProject(t testing.TB, st *store.Store, slug string) store.Project {
 	return p
 }
 
+func mkItem(t testing.TB, svc *service.Service, p store.CreateItemParams, actor string) store.Item {
+	t.Helper()
+	it, err := svc.CreateItem(context.Background(), p, actor)
+	if err != nil {
+		t.Fatalf("create item: %v", err)
+	}
+	return it
+}
+
 func countRows(t testing.TB, st *store.Store, sql string, args ...any) int {
 	t.Helper()
 	var n int
@@ -183,9 +192,9 @@ func TestProjectFilteredCounts(t *testing.T) {
 	ctx := context.Background()
 	a := mkProject(t, st, "alpha")
 	b := mkProject(t, st, "beta")
-	svc.CreateItem(ctx, store.CreateItemParams{ProjectID: a.ID, Title: "a1"}, "tester")
-	svc.CreateItem(ctx, store.CreateItemParams{ProjectID: a.ID, Title: "a2"}, "tester")
-	svc.CreateItem(ctx, store.CreateItemParams{ProjectID: b.ID, Title: "b1"}, "tester")
+	mkItem(t, svc, store.CreateItemParams{ProjectID: a.ID, Title: "a1"}, "tester")
+	mkItem(t, svc, store.CreateItemParams{ProjectID: a.ID, Title: "a2"}, "tester")
+	mkItem(t, svc, store.CreateItemParams{ProjectID: b.ID, Title: "b1"}, "tester")
 	counts, err := st.CountItemsByStatusForProject(ctx, a.ID)
 	if err != nil {
 		t.Fatalf("counts: %v", err)
@@ -204,7 +213,7 @@ func TestWebhookLeaseHidesEvent(t *testing.T) {
 	st, svc := setup(t)
 	ctx := context.Background()
 	p := mkProject(t, st, "alpha")
-	svc.CreateItem(ctx, store.CreateItemParams{ProjectID: p.ID, Title: "task"}, "tester") // enqueues item.created
+	mkItem(t, svc, store.CreateItemParams{ProjectID: p.ID, Title: "task"}, "tester") // enqueues item.created
 
 	leased, err := st.LeaseWebhookEvents(ctx, 10)
 	if err != nil {
@@ -224,7 +233,7 @@ func TestWebhookWorkerDelivers(t *testing.T) {
 	st, svc := setup(t)
 	ctx := context.Background()
 	p := mkProject(t, st, "alpha")
-	svc.CreateItem(ctx, store.CreateItemParams{ProjectID: p.ID, Title: "task"}, "tester")
+	mkItem(t, svc, store.CreateItemParams{ProjectID: p.ID, Title: "task"}, "tester")
 
 	svc.RunWebhookWorkerOnce(ctx)
 	if n := countRows(t, st, `SELECT count(*) FROM webhook_events WHERE delivered_at IS NOT NULL`); n != 1 {

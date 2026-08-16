@@ -41,9 +41,9 @@ jobs:
           sqlc vet || echo "sqlc vet reported issues (non-fatal)"
         continue-on-error: true
       - name: golangci-lint
-        if: hashFiles('.golangci.yml', '.golangci.yaml', '.golangci.toml') != ''
-        uses: golangci/golangci-lint-action@v6
-        continue-on-error: true
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.6
 
   web:
     name: Web
@@ -60,5 +60,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install
         run: npm ci
+      - name: Test
+        run: npm test
       - name: Build
         run: npm run build

@@ -91,7 +91,7 @@ func TestWebhookPerHookDelivery(t *testing.T) {
 			t.Fatalf("create webhook: %v", err)
 		}
 	}
-	svc.CreateItem(ctx, store.CreateItemParams{ProjectID: p.ID, Title: "task"}, "t")
+	mkItem(t, svc, store.CreateItemParams{ProjectID: p.ID, Title: "task"}, "t")
 
 	svc.RunWebhookWorkerOnce(ctx) // attempt 1: good ACKs, bad 500s
 	// Make the rescheduled event due again, then retry.
@@ -195,7 +195,7 @@ func TestUsageAnalytics(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := mkProject(t, st, "alpha")
-	svc.CreateItem(ctx, store.CreateItemParams{ProjectID: p.ID, Title: "searchable widget"}, "t")
+	mkItem(t, svc, store.CreateItemParams{ProjectID: p.ID, Title: "searchable widget"}, "t")
 
 	svc.RecordToolCall(ctx, service.ToolCall{
 		Tool: "create_item", Actor: "tester", Project: "alpha", OK: true,
@@ -209,7 +209,9 @@ func TestUsageAnalytics(t *testing.T) {
 	if _, _, err := svc.SearchSmart(ctx, "widget", pgtype.UUID{}, nil, nil, 0, 0); err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	svc.SearchSmart(ctx, "zzqqxxyyzz", pgtype.UUID{}, nil, nil, 0, 0)
+	if _, _, err := svc.SearchSmart(ctx, "zzqqxxyyzz", pgtype.UUID{}, nil, nil, 0, 0); err != nil {
+		t.Fatalf("zero-result search: %v", err)
+	}
 
 	rep, err := svc.UsageReport(ctx, 7, []string{"create_item", "get_item", "digest"})
 	if err != nil {
