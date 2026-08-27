@@ -14,6 +14,7 @@ import { Board } from "./components/Board";
 import { ActivityFeed } from "./components/ActivityFeed";
 import { ProjectDrawer } from "./components/ProjectDrawer";
 import { QuickAdd } from "./components/QuickAdd";
+import { NewProject } from "./components/NewProject";
 import { ItemLinksModal } from "./components/ItemLinks";
 
 type View = "board" | "activity";
@@ -134,6 +135,7 @@ function Dashboard({
   const [tagFilter, setTagFilter] = useState("");
   const [search, setSearch] = useState("");
   const [adding, setAdding] = useState(false);
+  const [addingProject, setAddingProject] = useState(false);
   const [drawerSlug, setDrawerSlug] = useState<string | null>(null);
   const [linksItem, setLinksItem] = useState<Item | null>(null);
 
@@ -215,6 +217,9 @@ function Dashboard({
         <button className="btn primary" onClick={() => setAdding((a) => !a)}>
           + Quick add
         </button>
+        <button className="btn" onClick={() => setAddingProject((a) => !a)}>
+          + Project
+        </button>
         <button
           className="btn ghost"
           title="Sign out"
@@ -270,13 +275,14 @@ function Dashboard({
           onDone={() => setAdding(false)}
         />
       )}
+      {addingProject && <NewProject onDone={() => setAddingProject(false)} />}
 
       <main className="content">
         {projectsQ.isLoading ? (
           <div className="muted pad">Loading…</div>
         ) : projects.length === 0 ? (
           <div className="muted pad">
-            No projects yet. Create one via the API or MCP to get started.
+            No projects yet. Use “+ Project” above to create one.
           </div>
         ) : view === "board" ? (
           <Board

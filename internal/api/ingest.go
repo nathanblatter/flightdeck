@@ -128,7 +128,7 @@ func (s *Server) ingestCapture(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "title or body too long")
 		return
 	}
-	typ := req.Type
+	typ := strings.ToLower(strings.TrimSpace(req.Type))
 	if typ == "" {
 		typ = "task"
 	}
