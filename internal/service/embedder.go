@@ -19,8 +19,8 @@ const (
 	embedMaxChars     = 8000             // cap per-row text to bound token cost
 )
 
-// RunEmbedder backfills missing embeddings for items AND high-signal activity
-// (decisions/progress/rejections/comments): once on startup, then on a ticker until ctx
+// RunEmbedder backfills missing embeddings for items AND all activity
+// with a non-empty body: once on startup, then on a ticker until ctx
 // is cancelled. It is a no-op when embeddings aren't configured (no
 // OPENAI_API_KEY), so semantic search simply stays dark and the rest of the
 // system is unaffected. Items are picked up whenever their embedding is NULL —
@@ -170,7 +170,7 @@ func (s *Service) itemBatch(ctx context.Context) ([]embedRow, error) {
 	return rows, nil
 }
 
-// activityBatch loads the next batch of decision/progress/rejected activity
+// activityBatch loads the next batch of activity
 // needing an embedding.
 func (s *Service) activityBatch(ctx context.Context) ([]embedRow, error) {
 	acts, err := s.St.ListActivityNeedingEmbedding(ctx, embedBatchSize)

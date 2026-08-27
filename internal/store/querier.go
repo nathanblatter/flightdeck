@@ -65,8 +65,7 @@ type Querier interface {
 	// Webhooks subscribed to this project (or all projects) and this event (or all).
 	ListActiveWebhooksForEvent(ctx context.Context, arg ListActiveWebhooksForEventParams) ([]Webhook, error)
 	ListActivity(ctx context.Context, arg ListActivityParams) ([]Activity, error)
-	// High-signal activity (decisions, progress, rejections, comments — the "why" agents
-	// search for) that has no embedding yet. Rows with a 'failed' marker are poison
+	// Any activity with a non-empty body that has no embedding yet. Rows with a 'failed' marker are poison
 	// and skipped. Activity is immutable, so there is no re-embed-on-edit path.
 	ListActivityNeedingEmbedding(ctx context.Context, lim int32) ([]ListActivityNeedingEmbeddingRow, error)
 	ListAttachmentsForItem(ctx context.Context, itemID uuid.UUID) ([]Attachment, error)

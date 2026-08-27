@@ -38,8 +38,7 @@ const listActivityNeedingEmbedding = `-- name: ListActivityNeedingEmbedding :man
 SELECT a.id, a.body
 FROM activity a
 LEFT JOIN activity_embeddings e ON e.activity_id = a.id
-WHERE a.kind IN ('decision', 'progress', 'rejected', 'comment')
-  AND a.body <> ''
+WHERE a.body <> ''
   AND e.activity_id IS NULL
 ORDER BY a.created_at DESC
 LIMIT $1::int
@@ -50,8 +49,7 @@ type ListActivityNeedingEmbeddingRow struct {
 	Body string    `json:"body"`
 }
 
-// High-signal activity (decisions, progress, rejections, comments — the "why" agents
-// search for) that has no embedding yet. Rows with a 'failed' marker are poison
+// Any activity with a non-empty body that has no embedding yet. Rows with a 'failed' marker are poison
 // and skipped. Activity is immutable, so there is no re-embed-on-edit path.
 func (q *Queries) ListActivityNeedingEmbedding(ctx context.Context, lim int32) ([]ListActivityNeedingEmbeddingRow, error) {
 	rows, err := q.db.Query(ctx, listActivityNeedingEmbedding, lim)
