@@ -20,7 +20,7 @@ const (
 )
 
 // RunEmbedder backfills missing embeddings for items AND high-signal activity
-// (decisions/progress/rejections): once on startup, then on a ticker until ctx
+// (decisions/progress/rejections/comments): once on startup, then on a ticker until ctx
 // is cancelled. It is a no-op when embeddings aren't configured (no
 // OPENAI_API_KEY), so semantic search simply stays dark and the rest of the
 // system is unaffected. Items are picked up whenever their embedding is NULL —
