@@ -15,6 +15,7 @@ import (
 	"flightdeck/internal/auth"
 	"flightdeck/internal/service"
 	"flightdeck/internal/store"
+	"flightdeck/internal/update"
 )
 
 type Server struct {
@@ -23,6 +24,9 @@ type Server struct {
 
 	// Version is reported by GET /setup/status (and set from main).
 	Version string
+	// Upd surfaces "a newer release exists" on /setup/status for the SPA
+	// banner. Nil (disabled or tests) reports no update.
+	Upd *update.Checker
 	// SetupToken authenticates the one-time first-run wizard; empty once an
 	// instance is set up (see setup.go).
 	SetupToken string

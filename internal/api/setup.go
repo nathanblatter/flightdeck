@@ -22,6 +22,9 @@ type setupStatusResp struct {
 	SetupComplete bool   `json:"setup_complete"`
 	InstanceName  string `json:"instance_name"`
 	Version       string `json:"version"`
+	// LatestVersion is set (with UpdateURL) when a newer release is published.
+	LatestVersion string `json:"latest_version,omitempty"`
+	UpdateURL     string `json:"update_url,omitempty"`
 }
 
 func (s *Server) setupStatus(w http.ResponseWriter, r *http.Request) {
@@ -30,11 +33,16 @@ func (s *Server) setupStatus(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, setupStatusResp{
+	resp := setupStatusResp{
 		SetupComplete: done,
 		InstanceName:  s.Svc.InstanceName(),
 		Version:       s.Version,
-	})
+	}
+	if rel, ok := s.Upd.Available(); ok {
+		resp.LatestVersion = rel.Tag
+		resp.UpdateURL = rel.URL
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // isSetupComplete caches the positive answer: once set up, always set up.

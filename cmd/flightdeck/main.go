@@ -23,6 +23,7 @@ import (
 	"flightdeck/internal/metrics"
 	"flightdeck/internal/service"
 	"flightdeck/internal/store"
+	"flightdeck/internal/update"
 	"flightdeck/web"
 )
 
@@ -47,11 +48,14 @@ func main() {
 		case "up":
 			runUp(os.Args[2:])
 			return
+		case "update":
+			runUpdate(os.Args[2:])
+			return
 		case "version", "--version", "-v":
 			fmt.Println(Version)
 			return
 		default:
-			fmt.Fprintf(os.Stderr, "unknown command %q\n\nusage: flightdeck [serve|migrate|keygen|keys|up|version]\n", os.Args[1])
+			fmt.Fprintf(os.Stderr, "unknown command %q\n\nusage: flightdeck [serve|migrate|keygen|keys|up|update|version]\n", os.Args[1])
 			os.Exit(2)
 		}
 	}
@@ -107,6 +111,12 @@ func runServe() {
 	apiSrv := api.New(st, svc)
 	apiSrv.Version = Version
 
+	// Release watcher: polls GitHub for a newer tagged release and feeds the
+	// upgrade notice into MCP orient responses and /api/setup/status. Nil when
+	// disabled (FLIGHTDECK_UPDATE_REPO=off) — every consumer is nil-safe.
+	upd := update.New(Version)
+	apiSrv.Upd = upd
+
 	// First-run setup: a fresh instance (no keys yet) needs a one-time token so
 	// the SPA wizard can authenticate. `flightdeck up` provides it via env; a
 	// bare `serve` generates one and logs it. Instances that are already set up
@@ -145,7 +155,7 @@ func runServe() {
 	})
 
 	// MCP streamable-HTTP, gated behind a write-capable key (agents get read+write).
-	mcpHandler := mcpserver.NewHandler(st, svc, Version)
+	mcpHandler := mcpserver.NewHandler(st, svc, Version, upd)
 	mux.Handle("/mcp", auth.Middleware(st, auth.ScopeWrite)(mcpHandler))
 	mux.Handle("/mcp/", auth.Middleware(st, auth.ScopeWrite)(mcpHandler))
 
@@ -177,6 +187,7 @@ func runServe() {
 	go svc.RunWebhookWorker(ctx)
 	go svc.RunMaintenance(ctx)
 	go svc.RunEmbedder(ctx)
+	go upd.Run(ctx)
 
 	go func() {
 		log.Printf("flightdeck %s listening on %s", Version, addr)

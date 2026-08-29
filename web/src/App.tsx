@@ -8,7 +8,9 @@ import {
   setupStatus,
   type Item,
   type Project,
+  type SetupStatus,
 } from "./api";
+import { updateNotice } from "./lib";
 import { SetupWizard } from "./components/SetupWizard";
 import { Board } from "./components/Board";
 import { ActivityFeed } from "./components/ActivityFeed";
@@ -47,7 +49,11 @@ export function App() {
   }
   if (!hasKey) return <KeyGate onSet={() => setHasKey(true)} />;
   return (
-    <Dashboard instanceName={instanceName} onSignOut={() => setHasKey(false)} />
+    <Dashboard
+      instanceName={instanceName}
+      setup={setupQ.data}
+      onSignOut={() => setHasKey(false)}
+    />
   );
 }
 
@@ -124,12 +130,16 @@ function useDebounced<T>(value: T, ms: number): T {
 
 function Dashboard({
   instanceName,
+  setup,
   onSignOut,
 }: {
   instanceName: string;
+  setup?: SetupStatus;
   onSignOut: () => void;
 }) {
   const [view, setView] = useState<View>("board");
+  const [updateDismissed, setUpdateDismissed] = useState(false);
+  const notice = updateNotice(setup);
   const [projectFilter, setProjectFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [tagFilter, setTagFilter] = useState("");
@@ -231,6 +241,26 @@ function Dashboard({
           ⎋
         </button>
       </header>
+
+      {notice && !updateDismissed && (
+        <div className="update-banner">
+          <span>
+            {notice}{" "}
+            {setup?.update_url && (
+              <a href={setup.update_url} target="_blank" rel="noreferrer">
+                release notes
+              </a>
+            )}
+          </span>
+          <button
+            className="btn ghost"
+            title="Dismiss"
+            onClick={() => setUpdateDismissed(true)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <div className="filterbar">
         <select

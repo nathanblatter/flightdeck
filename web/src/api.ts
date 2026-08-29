@@ -210,6 +210,9 @@ export interface SetupStatus {
   setup_complete: boolean;
   instance_name: string;
   version: string;
+  // Present when the server has seen a newer published release.
+  latest_version?: string;
+  update_url?: string;
 }
 
 export interface MintedKey {

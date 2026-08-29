@@ -20,11 +20,16 @@ import (
 	"flightdeck/internal/metrics"
 	"flightdeck/internal/service"
 	"flightdeck/internal/store"
+	"flightdeck/internal/update"
 )
 
 type handlers struct {
 	st  *store.Store
 	svc *service.Service
+	// upd answers "is a newer flightdeck released"; its notice rides along on
+	// the orient calls so whichever agent session touches the instance first
+	// sees the upgrade prompt. Nil (disabled) is fine.
+	upd *update.Checker
 	// toolNames is every registered tool, collected by addTool so usage_report
 	// can flag registered-but-never-called tools.
 	toolNames []string
@@ -56,8 +61,8 @@ func addTool[In, Out any](h *handlers, s *mcpsdk.Server, t *mcpsdk.Tool, fn func
 
 // NewHandler builds the MCP server, registers all tools, and returns an
 // http.Handler serving the streamable-HTTP transport (mount it at /mcp).
-func NewHandler(st *store.Store, svc *service.Service, version string) http.Handler {
-	h := &handlers{st: st, svc: svc}
+func NewHandler(st *store.Store, svc *service.Service, version string, upd *update.Checker) http.Handler {
+	h := &handlers{st: st, svc: svc, upd: upd}
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{
 		Name:    "flightdeck",
 		Version: version,
@@ -468,6 +473,9 @@ func (h *handlers) getProjectContext(ctx context.Context, _ *mcpsdk.CallToolRequ
 	if err != nil {
 		return dto.ProjectContext{}, err
 	}
+	if n := h.upd.Notice(); n != "" {
+		bundle.Nudges = append(bundle.Nudges, n)
+	}
 	return bundle, nil
 }
 
@@ -475,6 +483,9 @@ func (h *handlers) getGlobalContext(ctx context.Context, _ *mcpsdk.CallToolReque
 	bundle, err := h.svc.GlobalContext(ctx, verbosityOf(in.Verbosity))
 	if err != nil {
 		return dto.GlobalContext{}, err
+	}
+	if n := h.upd.Notice(); n != "" {
+		bundle.Notices = append(bundle.Notices, n)
 	}
 	return bundle, nil
 }

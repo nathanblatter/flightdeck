@@ -89,8 +89,12 @@ curl -X POST http://127.0.0.1:4310/api/ingest/capture \
 
 ## Operations
 
-- **Upgrade**: `git pull` in the repo, then re-run the same `flightdeck up`
-  command (compose file is regenerated, `.env` and data are preserved).
+- **Upgrade**: `go run ./cmd/flightdeck update --dir ~/.flightdeck/work --port 4310`
+  (same flags as `up`) — fetches tags, checks out the latest release (`vX.Y.Z`),
+  rebuilds, and waits for `/healthz`. `.env` and data are preserved. The running
+  instance tells you when an update exists: MCP orient calls carry a notice line
+  and the web UI shows a banner. Releases are cut by pushing a `v*` tag; the
+  `release.yml` workflow publishes the GitHub Release once tests pass.
 - **Backup**: `docker compose -p work --project-directory ~/.flightdeck/work exec postgres pg_dump -U postgres flightdeck > ~/.flightdeck/work/backups/$(date +%F).sql`
 - **Settings later**: `GET/PUT /api/settings` (write key) — instance name,
   OpenAI key, flags. No restart needed.

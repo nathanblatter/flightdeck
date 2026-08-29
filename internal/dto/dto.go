@@ -332,6 +332,9 @@ type ProjectOverview struct {
 // GlobalContext is the "load the map" payload across all active projects.
 type GlobalContext struct {
 	Projects []ProjectOverview `json:"projects"`
+	// Notices are instance-level lines (e.g. "a newer flightdeck is released")
+	// surfaced at orient time, mirroring ProjectContext.Nudges.
+	Notices []string `json:"notices,omitempty"`
 }
 
 // SearchResults bundles ranked item and activity matches for a FTS query.

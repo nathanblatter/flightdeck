@@ -51,3 +51,14 @@ export function relativeTime(iso: string): string {
   if (d < 30) return `${d}d ago`;
   return new Date(iso).toLocaleDateString();
 }
+
+// updateNotice returns the banner line when the server reports a newer
+// published release, else null. The server (internal/update) already did the
+// semver comparison — an empty/absent latest_version means "current".
+export function updateNotice(status?: {
+  version: string;
+  latest_version?: string;
+}): string | null {
+  if (!status?.latest_version) return null;
+  return `Flightdeck ${status.latest_version} is available (running ${status.version}) — run \`flightdeck update\` on the host to upgrade.`;
+}

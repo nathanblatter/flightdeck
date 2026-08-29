@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { COLUMNS, PRIORITY_COLOR, PRIORITY_RANK, projectColor, relativeTime } from "./lib";
+import { COLUMNS, PRIORITY_COLOR, PRIORITY_RANK, projectColor, relativeTime, updateNotice } from "./lib";
 
 describe("COLUMNS", () => {
   it("keeps board order and omits wontfix", () => {
@@ -66,5 +66,20 @@ describe("relativeTime", () => {
   it("falls back to a locale date after ~30 days", () => {
     const old = at(45 * 86_400_000);
     expect(relativeTime(old)).toBe(new Date(old).toLocaleDateString());
+  });
+});
+
+describe("updateNotice", () => {
+  it("returns null when current or unknown", () => {
+    expect(updateNotice(undefined)).toBeNull();
+    expect(updateNotice({ version: "v0.1.0" })).toBeNull();
+    expect(updateNotice({ version: "v0.1.0", latest_version: "" })).toBeNull();
+  });
+
+  it("names both versions and the update command", () => {
+    const n = updateNotice({ version: "v0.1.0", latest_version: "v0.2.0" });
+    expect(n).toContain("v0.2.0");
+    expect(n).toContain("v0.1.0");
+    expect(n).toContain("flightdeck update");
   });
 });

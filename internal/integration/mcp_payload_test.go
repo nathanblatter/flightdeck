@@ -53,7 +53,7 @@ func TestMCPResultsSingleEncoded(t *testing.T) {
 		t.Fatalf("create item: %v", err)
 	}
 
-	srv := httptest.NewServer(mcp.NewHandler(st, svc, "test"))
+	srv := httptest.NewServer(mcp.NewHandler(st, svc, "test", nil))
 	defer srv.Close()
 
 	res := callTool(t, srv.URL, "get_global_context", nil)

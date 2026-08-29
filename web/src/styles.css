@@ -109,6 +109,21 @@ textarea {
   background: transparent;
 }
 
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13px;
+}
+.update-banner a {
+  color: var(--accent);
+}
+
 .filterbar {
   display: flex;
   align-items: center;

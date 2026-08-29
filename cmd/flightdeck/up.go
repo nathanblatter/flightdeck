@@ -8,32 +8,39 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"text/template"
 
 	"flightdeck/internal/auth"
 )
 
-// runUp bootstraps a self-contained flightdeck instance: an instance directory
-// with a generated .env (secrets, created once and never overwritten) and a
-// docker-compose.yml (regenerated each run — all variables live in .env), then
-// `docker compose up -d --build`. Idempotent: re-running against an existing
-// instance just re-applies the compose. This is how a second instance (e.g. a
-// work laptop) runs without touching any shared infra: its own postgres, its
-// own redis, bound to 127.0.0.1 only.
-func runUp(args []string) {
-	fs := flag.NewFlagSet("up", flag.ExitOnError)
-	dir := fs.String("dir", "", "instance directory (default ~/.flightdeck/<name>)")
-	name := fs.String("name", "", "instance/compose project name (default: basename of --dir, else \"work\")")
-	port := fs.Int("port", 4300, "host port to bind on 127.0.0.1")
-	repo := fs.String("repo", "", "path to the flightdeck repo checkout (build context; default: current directory)")
-	noStart := fs.Bool("no-start", false, "generate files only, don't run docker compose")
-	_ = fs.Parse(args)
+// instanceOpts is the resolved identity of a self-contained instance: where
+// the repo checkout is, where the instance state lives, and how it's exposed.
+// Shared by `up` (bootstrap/re-apply) and `update` (checkout new tag, re-apply).
+type instanceOpts struct {
+	repoAbs  string
+	instName string
+	instAbs  string
+	port     int
+}
 
-	repoDir := *repo
-	if repoDir == "" {
-		repoDir = "."
+// instanceFlags registers the flags `up` and `update` share so both commands
+// are invoked identically.
+func instanceFlags(fs *flag.FlagSet) (dir, name *string, port *int, repo *string) {
+	dir = fs.String("dir", "", "instance directory (default ~/.flightdeck/<name>)")
+	name = fs.String("name", "", "instance/compose project name (default: basename of --dir, else \"work\")")
+	port = fs.Int("port", 4300, "host port to bind on 127.0.0.1")
+	repo = fs.String("repo", "", "path to the flightdeck repo checkout (build context; default: current directory)")
+	return
+}
+
+// resolveInstance turns the shared flags into absolute paths, validating that
+// repo actually looks like the flightdeck checkout.
+func resolveInstance(dir, name string, port int, repo string) instanceOpts {
+	if repo == "" {
+		repo = "."
 	}
-	repoAbs, err := filepath.Abs(repoDir)
+	repoAbs, err := filepath.Abs(repo)
 	if err != nil {
 		log.Fatalf("resolve repo path: %v", err)
 	}
@@ -41,15 +48,15 @@ func runUp(args []string) {
 		log.Fatalf("%s does not look like the flightdeck repo (no Dockerfile) — pass --repo", repoAbs)
 	}
 
-	instName := *name
+	instName := name
 	if instName == "" {
-		if *dir != "" {
-			instName = filepath.Base(*dir)
+		if dir != "" {
+			instName = filepath.Base(dir)
 		} else {
 			instName = "work"
 		}
 	}
-	instDir := *dir
+	instDir := dir
 	if instDir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -61,8 +68,45 @@ func runUp(args []string) {
 	if err != nil {
 		log.Fatalf("resolve instance dir: %v", err)
 	}
+	return instanceOpts{repoAbs: repoAbs, instName: instName, instAbs: instAbs, port: port}
+}
 
-	for _, d := range []string{instAbs, filepath.Join(instAbs, "pgdata"), filepath.Join(instAbs, "backups")} {
+// runUp bootstraps a self-contained flightdeck instance: an instance directory
+// with a generated .env (secrets, created once and never overwritten) and a
+// docker-compose.yml (regenerated each run — all variables live in .env), then
+// `docker compose up -d --build`. Idempotent: re-running against an existing
+// instance just re-applies the compose. This is how a second instance (e.g. a
+// work laptop) runs without touching any shared infra: its own postgres, its
+// own redis, bound to 127.0.0.1 only.
+func runUp(args []string) {
+	fs := flag.NewFlagSet("up", flag.ExitOnError)
+	dir, name, port, repo := instanceFlags(fs)
+	noStart := fs.Bool("no-start", false, "generate files only, don't run docker compose")
+	_ = fs.Parse(args)
+
+	o := resolveInstance(*dir, *name, *port, *repo)
+	setupToken := applyInstance(o, *noStart)
+	if *noStart {
+		return
+	}
+
+	fmt.Printf("\nflightdeck %q is starting:\n", o.instName)
+	fmt.Printf("  UI / API : http://127.0.0.1:%d\n", o.port)
+	fmt.Printf("  MCP      : http://127.0.0.1:%d/mcp\n", o.port)
+	if setupToken != "" {
+		fmt.Println("\n  SETUP TOKEN (first run — paste into the web UI wizard):")
+		fmt.Printf("    %s\n", setupToken)
+	} else {
+		fmt.Printf("\n  setup token (if setup is still pending): see %s\n", filepath.Join(o.instAbs, ".env"))
+	}
+}
+
+// applyInstance ensures the instance dir/.env exist, regenerates the compose
+// file (stamping the image with the repo's current git-describe version), and
+// runs `docker compose up -d --build`. Returns the setup token when this call
+// created the .env (i.e. a brand-new instance), else "".
+func applyInstance(o instanceOpts, noStart bool) string {
+	for _, d := range []string{o.instAbs, filepath.Join(o.instAbs, "pgdata"), filepath.Join(o.instAbs, "backups")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			log.Fatalf("mkdir %s: %v", d, err)
 		}
@@ -70,7 +114,7 @@ func runUp(args []string) {
 
 	// .env holds the secrets; write once, never overwrite, so re-running up
 	// can't rotate the DB password or setup token out from under the instance.
-	envPath := filepath.Join(instAbs, ".env")
+	envPath := filepath.Join(o.instAbs, ".env")
 	var setupToken string
 	if _, err := os.Stat(envPath); os.IsNotExist(err) {
 		pgPass, err := auth.NewRawKey("")
@@ -87,7 +131,7 @@ POSTGRES_PASSWORD=%s
 FLIGHTDECK_SETUP_TOKEN=%s
 # Optional: enables semantic search (can also be set later in the web UI).
 OPENAI_API_KEY=
-`, *port, pgPass, setupToken)
+`, o.port, pgPass, setupToken)
 		if err := os.WriteFile(envPath, []byte(env), 0o600); err != nil {
 			log.Fatalf("write .env: %v", err)
 		}
@@ -95,38 +139,47 @@ OPENAI_API_KEY=
 		log.Fatalf("stat .env: %v", err)
 	}
 
-	composePath := filepath.Join(instAbs, "docker-compose.yml")
+	composePath := filepath.Join(o.instAbs, "docker-compose.yml")
 	var buf bytes.Buffer
 	tpl := template.Must(template.New("compose").Parse(composeTemplate))
-	if err := tpl.Execute(&buf, map[string]string{"Repo": repoAbs}); err != nil {
+	if err := tpl.Execute(&buf, map[string]string{
+		"Repo":    o.repoAbs,
+		"Version": repoVersion(o.repoAbs),
+	}); err != nil {
 		log.Fatalf("render compose: %v", err)
 	}
 	if err := os.WriteFile(composePath, buf.Bytes(), 0o644); err != nil {
 		log.Fatalf("write compose: %v", err)
 	}
 
-	fmt.Printf("instance %q ready in %s\n", instName, instAbs)
-	if *noStart {
+	fmt.Printf("instance %q ready in %s\n", o.instName, o.instAbs)
+	if noStart {
 		fmt.Println("skipping start (--no-start); run:")
-		fmt.Printf("  docker compose -p %s --project-directory %s up -d --build\n", instName, instAbs)
-		return
+		fmt.Printf("  docker compose -p %s --project-directory %s up -d --build\n", o.instName, o.instAbs)
+		return setupToken
 	}
 
-	cmd := exec.Command("docker", "compose", "-p", instName, "--project-directory", instAbs, "up", "-d", "--build")
+	cmd := exec.Command("docker", "compose", "-p", o.instName, "--project-directory", o.instAbs, "up", "-d", "--build")
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		log.Fatalf("docker compose up: %v", err)
 	}
+	return setupToken
+}
 
-	fmt.Printf("\nflightdeck %q is starting:\n", instName)
-	fmt.Printf("  UI / API : http://127.0.0.1:%d\n", *port)
-	fmt.Printf("  MCP      : http://127.0.0.1:%d/mcp\n", *port)
-	if setupToken != "" {
-		fmt.Println("\n  SETUP TOKEN (first run — paste into the web UI wizard):")
-		fmt.Printf("    %s\n", setupToken)
-	} else {
-		fmt.Printf("\n  setup token (if setup is still pending): see %s\n", envPath)
+// repoVersion stamps the built image with the checkout's git-describe version
+// so a running instance can compare itself against published releases. Falls
+// back to "dev" outside a git checkout (e.g. a tarball download).
+func repoVersion(repoAbs string) string {
+	out, err := exec.Command("git", "-C", repoAbs, "describe", "--tags", "--always", "--dirty").Output()
+	if err != nil {
+		return "dev"
 	}
+	v := strings.TrimSpace(string(out))
+	if v == "" {
+		return "dev"
+	}
+	return v
 }
 
 // composeTemplate is the self-contained instance stack. Everything variable
@@ -157,7 +210,10 @@ services:
     restart: unless-stopped
 
   flightdeck:
-    build: {{.Repo}}
+    build:
+      context: {{.Repo}}
+      args:
+        VERSION: {{.Version}}
     environment:
       DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/flightdeck?sslmode=disable
       FLIGHTDECK_REDIS_URL: redis://redis:6379/2
