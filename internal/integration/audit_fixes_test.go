@@ -136,8 +136,9 @@ func TestEmbeddingPoisonParking(t *testing.T) {
 	}
 }
 
-// Decision/progress activity flows through the embedding backlog and becomes
-// semantically searchable; parked activity drops out of the backlog.
+// Every activity kind with a non-empty body flows through the embedding
+// backlog (the kind allowlist was dropped for full-coverage semantic recall);
+// embedded rows drop out of the backlog.
 func TestActivityEmbedding(t *testing.T) {
 	st, svc := setup(t)
 	ctx := context.Background()
@@ -151,10 +152,11 @@ func TestActivityEmbedding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("log activity: %v", err)
 	}
-	// Comments are low-signal and must NOT enter the backlog.
+	// Comments embed too — human notes must be semantically searchable.
 	ckind := "comment"
 	cbody := "just a note"
-	if _, err := svc.LogActivity(ctx, store.CreateActivityParams{ProjectID: p.ID, Kind: &ckind, Actor: &actor, Body: &cbody}); err != nil {
+	comment, err := svc.LogActivity(ctx, store.CreateActivityParams{ProjectID: p.ID, Kind: &ckind, Actor: &actor, Body: &cbody})
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -162,12 +164,19 @@ func TestActivityEmbedding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("activity backlog: %v", err)
 	}
-	if len(backlog) != 1 || backlog[0].ID != row.ID {
-		t.Fatalf("backlog = %d rows, want just the decision", len(backlog))
+	if len(backlog) != 2 {
+		t.Fatalf("backlog = %d rows, want decision + comment", len(backlog))
 	}
 
+	// Orthogonal vectors so the semantic-search assertion below still isolates
+	// the decision.
 	if err := st.InsertActivityEmbedding(ctx, store.InsertActivityEmbeddingParams{
 		ActivityID: row.ID, Embedding: unitVec(0), Model: "test",
+	}); err != nil {
+		t.Fatalf("insert embedding: %v", err)
+	}
+	if err := st.InsertActivityEmbedding(ctx, store.InsertActivityEmbeddingParams{
+		ActivityID: comment.ID, Embedding: unitVec(1), Model: "test",
 	}); err != nil {
 		t.Fatalf("insert embedding: %v", err)
 	}
