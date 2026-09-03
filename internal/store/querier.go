@@ -13,6 +13,7 @@ import (
 
 type Querier interface {
 	ActivityKindCountsSince(ctx context.Context, arg ActivityKindCountsSinceParams) ([]ActivityKindCountsSinceRow, error)
+	ContextEffectivenessSummary(ctx context.Context, recordedAt time.Time) (ContextEffectivenessSummaryRow, error)
 	CountActiveAPIKeys(ctx context.Context) (int64, error)
 	CountActivitySince(ctx context.Context, arg CountActivitySinceParams) (int64, error)
 	CountAttachmentsForItem(ctx context.Context, itemID uuid.UUID) (int64, error)
@@ -24,6 +25,7 @@ type Querier interface {
 	CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (ApiKey, error)
 	CreateActivity(ctx context.Context, arg CreateActivityParams) (Activity, error)
 	CreateAttachment(ctx context.Context, arg CreateAttachmentParams) (Attachment, error)
+	CreateContextImpactEvent(ctx context.Context, arg CreateContextImpactEventParams) (ContextImpactEvent, error)
 	CreateItem(ctx context.Context, arg CreateItemParams) (Item, error)
 	CreateItemLink(ctx context.Context, arg CreateItemLinkParams) (ItemLink, error)
 	CreateItemRef(ctx context.Context, arg CreateItemRefParams) (ItemRef, error)
@@ -44,6 +46,7 @@ type Querier interface {
 	EnqueueWebhookEvent(ctx context.Context, arg EnqueueWebhookEventParams) (WebhookEvent, error)
 	GetAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey, error)
 	GetAttachment(ctx context.Context, id uuid.UUID) (Attachment, error)
+	GetContextImpactByIdempotencyKey(ctx context.Context, arg GetContextImpactByIdempotencyKeyParams) (ContextImpactEvent, error)
 	GetItem(ctx context.Context, id uuid.UUID) (Item, error)
 	// Scoped to the project: idempotency keys are only unique per project, so a
 	// cross-project key reuse must not return another project's item.
@@ -72,6 +75,7 @@ type Querier interface {
 	// For a project, the active "blocks" edges: each row means blocked_id is blocked
 	// by blocker_id (whose status is still open). Used to flag non-ready open items.
 	ListBlockingEdgesByProject(ctx context.Context, projectID uuid.UUID) ([]ListBlockingEdgesByProjectRow, error)
+	ListContextImpactEvents(ctx context.Context, arg ListContextImpactEventsParams) ([]ContextImpactEvent, error)
 	// Dead-lettered / erroring events for operator visibility (last_error set).
 	ListFailedWebhookEvents(ctx context.Context, limit int32) ([]WebhookEvent, error)
 	ListItemRefs(ctx context.Context, itemID uuid.UUID) ([]ItemRef, error)
