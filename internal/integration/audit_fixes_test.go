@@ -221,6 +221,20 @@ func TestUsageAnalytics(t *testing.T) {
 	if _, _, err := svc.SearchSmart(ctx, "zzqqxxyyzz", pgtype.UUID{}, nil, nil, 0, 0); err != nil {
 		t.Fatalf("zero-result search: %v", err)
 	}
+	recordImpact := func(actor, session, effect, mechanism string, delta int32) {
+		t.Helper()
+		if _, _, err := svc.RecordContextImpact(ctx, service.ContextImpactInput{
+			SessionID: session, Project: "alpha", Effect: effect, Mechanism: mechanism,
+			Evidence: "hand-checked outcome", EstimatedMinutesDelta: &delta,
+		}, actor); err != nil {
+			t.Fatalf("record context impact: %v", err)
+		}
+	}
+	recordImpact("actor-a", "shared", "helpful", "prevented_error", 15)
+	recordImpact("actor-a", "shared", "harmful", "stale_or_incorrect", -5)
+	recordImpact("actor-b", "shared", "helpful", "duplicate_work_avoided", 20)
+	recordImpact("actor-a", "neutral-1", "neutral", "ignored", 0)
+	recordImpact("actor-a", "neutral-2", "neutral", "ignored", 0)
 
 	rep, err := svc.UsageReport(ctx, 7, []string{"create_item", "get_item", "digest"})
 	if err != nil {
@@ -243,5 +257,29 @@ func TestUsageAnalytics(t *testing.T) {
 	}
 	if len(rep.RecentErrors) != 1 || rep.RecentErrors[0].Tool != "get_item" {
 		t.Fatalf("recent errors = %v", rep.RecentErrors)
+	}
+	effectiveness := rep.ContextEffectiveness
+	if effectiveness.MeasurementBasis != "reported_impacts" ||
+		effectiveness.ReportedSessions != 4 || effectiveness.HelpfulSessions != 2 ||
+		effectiveness.NeutralSessions != 2 || effectiveness.HarmfulSessions != 1 ||
+		effectiveness.ContributionRate != 0.5 || effectiveness.PreventedErrorRate != 0.25 ||
+		effectiveness.DuplicateWorkAvoidanceRate != 0.25 || effectiveness.HarmRate != 0.25 ||
+		effectiveness.EstimatedMinutesNet != 30 || effectiveness.NetContextValue != 1 {
+		t.Fatalf("context effectiveness = %+v", effectiveness)
+	}
+}
+
+func TestUsageAnalyticsHasZeroContextEffectivenessWithoutReports(t *testing.T) {
+	_, svc := setup(t)
+	rep, err := svc.UsageReport(context.Background(), 7, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effectiveness := rep.ContextEffectiveness
+	if effectiveness.MeasurementBasis != "reported_impacts" ||
+		effectiveness.ReportedSessions != 0 || effectiveness.ContributionRate != 0 ||
+		effectiveness.PreventedErrorRate != 0 || effectiveness.HarmRate != 0 ||
+		effectiveness.EstimatedMinutesNet != 0 || effectiveness.NetContextValue != 0 {
+		t.Fatalf("context effectiveness = %+v", effectiveness)
 	}
 }

@@ -46,6 +46,7 @@ docker compose exec flightdeck flightdeck keys revoke <id>
 - `GET/POST /projects`, `GET/PATCH /projects/{slug}`
 - `GET/POST /items`, `GET/PATCH/DELETE /items/{id}` (filters: project, status, type, assignee, tag, q, updated_since)
 - `GET/POST /activity` (filters: project, item_id, kind, since)
+- `GET/POST /context-impact` — audit and record agent-reported helpful, ignored, or harmful context outcomes (`GET` filters: days, project, limit)
 - `GET /context/{slug}` — project orient bundle (open items flagged `blocked`/`blocked_by`); `GET /context` — horizontal view
 - `GET /next-action?project=&limit=` — ranked open, unblocked items ("what to work on")
 - `GET /digest/{slug}?since=` — compact rollup of recent activity (counts, decisions, summary)
@@ -77,7 +78,7 @@ Tools — orient: `list_projects`, `get_project_context`, `get_global_context`,
 `search`, `list_items`, `get_item`, `next_action`, `digest`, `stale`. Log:
 `create_project`, `create_item`, `update_item`, `log_activity`,
 `update_project_summary`, `set_project_instructions`, `link_items`,
-`unlink_items`, `add_item_ref`, `list_item_refs`.
+`unlink_items`, `add_item_ref`, `list_item_refs`, `record_context_impact`.
 
 `get_project_context` surfaces `rejected_approaches` (dead-end/out-of-scope
 notes) and freshness (`activities_since_summary`) so an agent can judge whether
@@ -85,6 +86,31 @@ to trust the summary; items carry `acceptance_criteria` + `acceptance_unmet` (th
 definition-of-done contract). `create_item`'s `idempotency_key` makes creation
 safe to retry in autonomous loops; `log_activity`'s `confidence` distinguishes
 human-confirmed truth from agent-inferred claims.
+
+## Context effectiveness analytics
+
+`record_context_impact` and `POST /api/context-impact` record one reported
+effect of retrieved context in a caller-defined work session. The allowed
+effect/mechanism pairs are:
+
+- `helpful`: `decision_changed`, `prevented_error`,
+  `duplicate_work_avoided`, or `reconstruction_saved`
+- `neutral`: `ignored`
+- `harmful`: `stale_or_incorrect`
+
+Each report includes evidence and may include the relevant project item,
+context references, a signed estimate of minutes saved or lost, and an
+idempotency key. Impact events stay outside the project activity feed so
+measurement does not become context noise. Raw reports are available through
+`GET /api/context-impact`.
+
+The existing REST and MCP usage report includes a `context_effectiveness`
+section with contribution, prevented-error, duplicate-work-avoidance, harm,
+estimated-time, and net-value measures across distinct `(actor, session_id)`
+pairs. Its `measurement_basis` is always `reported_impacts`: these values
+describe agent reports, not a proven causal effect. A controlled retrospective
+or randomized evaluation is still required to establish what would have
+happened without Flightdeck context.
 
 `next_action` ranks open, unblocked items (dependency-aware via `link_items`
 `blocks` edges); `digest` rolls up recent activity since a timestamp; `stale`

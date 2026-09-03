@@ -404,9 +404,30 @@ type UsageReport struct {
 	Daily        []DayCalls     `json:"daily,omitempty"`
 	RecentErrors []ToolError    `json:"recent_errors,omitempty"`
 	Search       SearchUsage    `json:"search"`
+	// ContextEffectiveness summarizes explicitly reported outcomes. It does not
+	// infer benefit from tool calls or claim a causal effect.
+	ContextEffectiveness ContextEffectiveness `json:"context_effectiveness"`
 	// Coverage reports how much of the corpus is actually embedded — the ceiling
 	// on what semantic search can ever return.
 	Coverage EmbeddingCoverage `json:"embedding_coverage"`
+}
+
+// ContextEffectiveness aggregates distinct (actor, session_id) pairs with
+// overlapping categories allowed for sessions that report mixed outcomes.
+type ContextEffectiveness struct {
+	MeasurementBasis             string  `json:"measurement_basis"`
+	ReportedSessions             int     `json:"reported_sessions"`
+	HelpfulSessions              int     `json:"helpful_sessions"`
+	NeutralSessions              int     `json:"neutral_sessions"`
+	HarmfulSessions              int     `json:"harmful_sessions"`
+	ContributionRate             float64 `json:"contribution_rate"`
+	PreventedErrorSessions       int     `json:"prevented_error_sessions"`
+	PreventedErrorRate           float64 `json:"prevented_error_rate"`
+	DuplicateWorkAvoidedSessions int     `json:"duplicate_work_avoided_sessions"`
+	DuplicateWorkAvoidanceRate   float64 `json:"duplicate_work_avoidance_rate"`
+	HarmRate                     float64 `json:"harm_rate"`
+	EstimatedMinutesNet          int     `json:"estimated_minutes_net"`
+	NetContextValue              int     `json:"net_context_value"`
 }
 
 // EmbeddingCoverage is the semantic tier's backfill health. A low embedded
