@@ -427,7 +427,6 @@ type ContextEffectiveness struct {
 	DuplicateWorkAvoidanceRate   float64 `json:"duplicate_work_avoidance_rate"`
 	HarmRate                     float64 `json:"harm_rate"`
 	EstimatedMinutesNet          int     `json:"estimated_minutes_net"`
-	NetContextValue              int     `json:"net_context_value"`
 }
 
 // EmbeddingCoverage is the semantic tier's backfill health. A low embedded

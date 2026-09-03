@@ -9,7 +9,8 @@ INSERT INTO context_impact_events (
     context_refs,
     evidence,
     estimated_minutes_delta,
-    idempotency_key
+    idempotency_key,
+    request_fingerprint
 )
 VALUES (
     sqlc.arg('actor'),
@@ -21,7 +22,8 @@ VALUES (
     sqlc.arg('context_refs'),
     sqlc.arg('evidence'),
     sqlc.narg('estimated_minutes_delta'),
-    sqlc.narg('idempotency_key')
+    sqlc.narg('idempotency_key'),
+    sqlc.arg('request_fingerprint')
 )
 RETURNING *;
 
@@ -63,4 +65,3 @@ SELECT
     count(*) FILTER (WHERE duplicate_work_avoided) AS duplicate_work_avoided_sessions,
     COALESCE(sum(estimated_minutes_net), 0)::bigint AS estimated_minutes_net
 FROM sessions;
-

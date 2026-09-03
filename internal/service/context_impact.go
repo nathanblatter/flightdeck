@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,6 +17,10 @@ import (
 
 // ErrInvalidContextImpact identifies caller-controlled validation failures.
 var ErrInvalidContextImpact = errors.New("invalid context impact")
+
+// ErrIdempotencyConflict identifies reuse of an idempotency key with input
+// that differs from the request which originally claimed it.
+var ErrIdempotencyConflict = errors.New("idempotency key was already used with different input")
 
 // ContextImpactInput is one agent-reported effect of retrieved context during
 // a caller-defined work session.
@@ -36,6 +43,24 @@ func (s *Service) RecordContextImpact(ctx context.Context, input ContextImpactIn
 	if err := ValidateContextImpact(input); err != nil {
 		return store.ContextImpactEvent{}, false, fmt.Errorf("%w: %v", ErrInvalidContextImpact, err)
 	}
+	if actor = strings.TrimSpace(actor); actor == "" {
+		return store.ContextImpactEvent{}, false, fmt.Errorf("%w: authenticated actor is required", ErrInvalidContextImpact)
+	}
+	fingerprint, err := contextImpactFingerprint(input)
+	if err != nil {
+		return store.ContextImpactEvent{}, false, err
+	}
+	if input.IdempotencyKey != nil {
+		prior, err := s.St.GetContextImpactByIdempotencyKey(ctx, store.GetContextImpactByIdempotencyKeyParams{
+			Actor: actor, IdempotencyKey: input.IdempotencyKey,
+		})
+		if err == nil {
+			return contextImpactReplay(prior, fingerprint)
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return store.ContextImpactEvent{}, false, err
+		}
+	}
 
 	project, err := s.St.GetProjectBySlug(ctx, input.Project)
 	if err != nil {
@@ -57,27 +82,13 @@ func (s *Service) RecordContextImpact(ctx context.Context, input ContextImpactIn
 		itemRef = &item.Ref
 	}
 
-	if actor = strings.TrimSpace(actor); actor == "" {
-		actor = "unknown"
-	}
-	if input.IdempotencyKey != nil {
-		prior, err := s.St.GetContextImpactByIdempotencyKey(ctx, store.GetContextImpactByIdempotencyKeyParams{
-			Actor: actor, IdempotencyKey: input.IdempotencyKey,
-		})
-		if err == nil {
-			return prior, false, nil
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return store.ContextImpactEvent{}, false, err
-		}
-	}
-
 	params := store.CreateContextImpactEventParams{
 		Actor: actor, SessionID: input.SessionID, Project: input.Project,
 		Item: itemRef, Effect: input.Effect, Mechanism: input.Mechanism,
 		ContextRefs: input.ContextRefs, Evidence: input.Evidence,
 		EstimatedMinutesDelta: input.EstimatedMinutesDelta,
 		IdempotencyKey:        input.IdempotencyKey,
+		RequestFingerprint:    fingerprint,
 	}
 	event, err := s.St.CreateContextImpactEvent(ctx, params)
 	if err == nil {
@@ -88,10 +99,40 @@ func (s *Service) RecordContextImpact(ctx context.Context, input ContextImpactIn
 			Actor: actor, IdempotencyKey: input.IdempotencyKey,
 		})
 		if getErr == nil {
-			return prior, false, nil
+			return contextImpactReplay(prior, fingerprint)
 		}
 	}
 	return store.ContextImpactEvent{}, false, err
+}
+
+func contextImpactReplay(prior store.ContextImpactEvent, fingerprint string) (store.ContextImpactEvent, bool, error) {
+	if prior.RequestFingerprint != fingerprint {
+		return store.ContextImpactEvent{}, false, ErrIdempotencyConflict
+	}
+	return prior, false, nil
+}
+
+func contextImpactFingerprint(input ContextImpactInput) (string, error) {
+	payload := struct {
+		SessionID             string   `json:"session_id"`
+		Project               string   `json:"project"`
+		Item                  *string  `json:"item"`
+		Effect                string   `json:"effect"`
+		Mechanism             string   `json:"mechanism"`
+		ContextRefs           []string `json:"context_refs"`
+		Evidence              string   `json:"evidence"`
+		EstimatedMinutesDelta *int32   `json:"estimated_minutes_delta"`
+	}{
+		SessionID: input.SessionID, Project: input.Project, Item: input.Item,
+		Effect: input.Effect, Mechanism: input.Mechanism, ContextRefs: input.ContextRefs,
+		Evidence: input.Evidence, EstimatedMinutesDelta: input.EstimatedMinutesDelta,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encode context impact fingerprint: %w", err)
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func (s *Service) contextImpactItem(ctx context.Context, ref string) (store.Item, error) {

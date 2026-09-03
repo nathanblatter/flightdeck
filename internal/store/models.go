@@ -68,6 +68,7 @@ type ContextImpactEvent struct {
 	Evidence              string    `json:"evidence"`
 	EstimatedMinutesDelta *int32    `json:"estimated_minutes_delta"`
 	IdempotencyKey        *string   `json:"idempotency_key"`
+	RequestFingerprint    string    `json:"request_fingerprint"`
 }
 
 type Item struct {

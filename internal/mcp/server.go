@@ -744,12 +744,16 @@ func (h *handlers) logActivity(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 }
 
 func (h *handlers) recordContextImpact(ctx context.Context, _ *mcpsdk.CallToolRequest, in recordContextImpactIn) (dto.ContextImpactEvent, error) {
+	identity, ok := auth.FromContext(ctx)
+	if !ok || identity.Name == "" {
+		return dto.ContextImpactEvent{}, fmt.Errorf("%w: authenticated actor is required", service.ErrInvalidContextImpact)
+	}
 	event, _, err := h.svc.RecordContextImpact(ctx, service.ContextImpactInput{
 		SessionID: in.SessionID, Project: in.Project, Item: in.Item,
 		Effect: in.Effect, Mechanism: in.Mechanism, ContextRefs: in.ContextRefs,
 		Evidence: in.Evidence, EstimatedMinutesDelta: in.EstimatedMinutesDelta,
 		IdempotencyKey: in.IdempotencyKey,
-	}, auth.Actor(ctx))
+	}, identity.Name)
 	if err != nil {
 		return dto.ContextImpactEvent{}, err
 	}

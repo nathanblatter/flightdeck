@@ -72,7 +72,8 @@ INSERT INTO context_impact_events (
     context_refs,
     evidence,
     estimated_minutes_delta,
-    idempotency_key
+    idempotency_key,
+    request_fingerprint
 )
 VALUES (
     $1,
@@ -84,9 +85,10 @@ VALUES (
     $7,
     $8,
     $9,
-    $10
+    $10,
+    $11
 )
-RETURNING id, recorded_at, actor, session_id, project, item, effect, mechanism, context_refs, evidence, estimated_minutes_delta, idempotency_key
+RETURNING id, recorded_at, actor, session_id, project, item, effect, mechanism, context_refs, evidence, estimated_minutes_delta, idempotency_key, request_fingerprint
 `
 
 type CreateContextImpactEventParams struct {
@@ -100,6 +102,7 @@ type CreateContextImpactEventParams struct {
 	Evidence              string   `json:"evidence"`
 	EstimatedMinutesDelta *int32   `json:"estimated_minutes_delta"`
 	IdempotencyKey        *string  `json:"idempotency_key"`
+	RequestFingerprint    string   `json:"request_fingerprint"`
 }
 
 func (q *Queries) CreateContextImpactEvent(ctx context.Context, arg CreateContextImpactEventParams) (ContextImpactEvent, error) {
@@ -114,6 +117,7 @@ func (q *Queries) CreateContextImpactEvent(ctx context.Context, arg CreateContex
 		arg.Evidence,
 		arg.EstimatedMinutesDelta,
 		arg.IdempotencyKey,
+		arg.RequestFingerprint,
 	)
 	var i ContextImpactEvent
 	err := row.Scan(
@@ -129,12 +133,13 @@ func (q *Queries) CreateContextImpactEvent(ctx context.Context, arg CreateContex
 		&i.Evidence,
 		&i.EstimatedMinutesDelta,
 		&i.IdempotencyKey,
+		&i.RequestFingerprint,
 	)
 	return i, err
 }
 
 const getContextImpactByIdempotencyKey = `-- name: GetContextImpactByIdempotencyKey :one
-SELECT id, recorded_at, actor, session_id, project, item, effect, mechanism, context_refs, evidence, estimated_minutes_delta, idempotency_key
+SELECT id, recorded_at, actor, session_id, project, item, effect, mechanism, context_refs, evidence, estimated_minutes_delta, idempotency_key, request_fingerprint
 FROM context_impact_events
 WHERE actor = $1
   AND idempotency_key = $2
@@ -161,12 +166,13 @@ func (q *Queries) GetContextImpactByIdempotencyKey(ctx context.Context, arg GetC
 		&i.Evidence,
 		&i.EstimatedMinutesDelta,
 		&i.IdempotencyKey,
+		&i.RequestFingerprint,
 	)
 	return i, err
 }
 
 const listContextImpactEvents = `-- name: ListContextImpactEvents :many
-SELECT id, recorded_at, actor, session_id, project, item, effect, mechanism, context_refs, evidence, estimated_minutes_delta, idempotency_key
+SELECT id, recorded_at, actor, session_id, project, item, effect, mechanism, context_refs, evidence, estimated_minutes_delta, idempotency_key, request_fingerprint
 FROM context_impact_events
 WHERE recorded_at >= $1
   AND ($2::text IS NULL OR project = $2)
@@ -202,6 +208,7 @@ func (q *Queries) ListContextImpactEvents(ctx context.Context, arg ListContextIm
 			&i.Evidence,
 			&i.EstimatedMinutesDelta,
 			&i.IdempotencyKey,
+			&i.RequestFingerprint,
 		); err != nil {
 			return nil, err
 		}

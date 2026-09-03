@@ -264,7 +264,7 @@ func TestUsageAnalytics(t *testing.T) {
 		effectiveness.NeutralSessions != 2 || effectiveness.HarmfulSessions != 1 ||
 		effectiveness.ContributionRate != 0.5 || effectiveness.PreventedErrorRate != 0.25 ||
 		effectiveness.DuplicateWorkAvoidanceRate != 0.25 || effectiveness.HarmRate != 0.25 ||
-		effectiveness.EstimatedMinutesNet != 30 || effectiveness.NetContextValue != 1 {
+		effectiveness.EstimatedMinutesNet != 30 {
 		t.Fatalf("context effectiveness = %+v", effectiveness)
 	}
 }
@@ -279,7 +279,7 @@ func TestUsageAnalyticsHasZeroContextEffectivenessWithoutReports(t *testing.T) {
 	if effectiveness.MeasurementBasis != "reported_impacts" ||
 		effectiveness.ReportedSessions != 0 || effectiveness.ContributionRate != 0 ||
 		effectiveness.PreventedErrorRate != 0 || effectiveness.HarmRate != 0 ||
-		effectiveness.EstimatedMinutesNet != 0 || effectiveness.NetContextValue != 0 {
+		effectiveness.EstimatedMinutesNet != 0 {
 		t.Fatalf("context effectiveness = %+v", effectiveness)
 	}
 }

@@ -180,7 +180,6 @@ func (s *Service) UsageReport(ctx context.Context, days int, knownTools []string
 		DuplicateWorkAvoidanceRate:   contextImpactRate(duplicates, reported),
 		HarmRate:                     contextImpactRate(harmful, reported),
 		EstimatedMinutesNet:          int(impact.EstimatedMinutesNet),
-		NetContextValue:              prevented + duplicates - harmful,
 	}
 	return rep, nil
 }

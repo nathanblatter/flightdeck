@@ -51,6 +51,7 @@ Each row in `context_impact_events` represents one reported effect of context wi
 | `evidence` | text | Required concise explanation of what changed and why the effect classification is justified. |
 | `estimated_minutes_delta` | integer, nullable | Signed estimate: positive means time saved, negative means time lost. |
 | `idempotency_key` | text, nullable | Safe-retry key unique per actor when present. |
+| `request_fingerprint` | text | SHA-256 of normalized input, used to detect changed input on key reuse. |
 
 The valid effect/mechanism combinations are:
 
@@ -65,7 +66,12 @@ The valid effect/mechanism combinations are:
 
 Helpful events may have a non-negative time delta, harmful events may have a non-positive delta, and neutral events must omit the delta or report zero. Database constraints mirror service validation.
 
-An event is immutable. Retrying a request with the same actor and idempotency key returns the original event without inserting a duplicate. Impact events are retained for longitudinal analysis and are not included in the existing short-lived tool-call purge.
+An event is immutable. Retrying an identical normalized request with the same
+actor and idempotency key returns the original event without inserting a
+duplicate, even if its source project or item has since been removed. Reusing
+the key with changed input returns a conflict instead of silently discarding
+the new report. Impact events are retained for longitudinal analysis and are
+not included in the existing short-lived tool-call purge.
 
 ## Interfaces
 
@@ -114,8 +120,7 @@ The existing `usage_report` response gains a `context_effectiveness` object. All
   "duplicate_work_avoided_sessions": 2,
   "duplicate_work_avoidance_rate": 0.1667,
   "harm_rate": 0.0833,
-  "estimated_minutes_net": 120,
-  "net_context_value": 4
+  "estimated_minutes_net": 120
 }
 ```
 
@@ -125,16 +130,29 @@ Calculations use distinct `(actor, session_id)` pairs within the selected window
 - prevented-error rate = sessions with a `prevented_error` event / reported sessions;
 - duplicate-work avoidance rate = sessions with a `duplicate_work_avoided` event / reported sessions;
 - harm rate = sessions with a harmful event / reported sessions;
-- estimated minutes net = sum of all reported signed time deltas; and
-- net context value = prevented-error sessions + duplicate-work-avoided sessions - harmful sessions.
+- estimated minutes net = sum of all reported signed time deltas.
+
+No synthetic net-value score is calculated: helpful mechanisms can overlap in
+one session, so combining them into a single scalar would double-count some
+positive outcomes and exclude others. The separate rates and signed time total
+remain directly interpretable.
 
 A session can be both helpful and harmful, so category counts and rates are intentionally not mutually exclusive. A report with no events returns zero counts and rates rather than nulls or division errors. `measurement_basis` prevents consumers from presenting these self-reported aggregates as causal proof.
 
 ## Validation and Errors
 
-The service requires a trimmed session ID of 1–200 characters and evidence of 1–2,000 characters. It accepts at most 20 context references of at most 200 characters each, an optional idempotency key of at most 200 characters, and an optional time delta from -1,440 to 1,440 minutes. It also validates project existence, optional item ownership, effect, mechanism, effect/mechanism compatibility, and the time-delta sign.
+The service requires an authenticated, nonblank actor, a trimmed session ID of
+1–200 characters, and evidence of 1–2,000 characters. It accepts at most 20
+context references of at most 200 characters each, an optional idempotency key
+of at most 200 characters, and an optional time delta from -1,440 to 1,440
+minutes. It also validates project existence, optional item ownership, effect,
+mechanism, effect/mechanism compatibility, and the time-delta sign.
 
-REST returns `400 Bad Request` for invalid input, `404 Not Found` for an unknown project or item, and the existing database-error response for storage failures. MCP returns the same validation meaning through its tool error. Analytics writes are synchronous because the caller deliberately records an outcome; failures are visible rather than silently discarded.
+REST returns `400 Bad Request` for invalid input, `404 Not Found` for an unknown
+project or item, and `409 Conflict` when an idempotency key is reused with
+changed input. MCP returns the same validation meaning through its tool error.
+Analytics writes are synchronous because the caller deliberately records an
+outcome; failures are visible rather than silently discarded.
 
 ## Testing
 
@@ -144,9 +162,12 @@ Tests will cover:
 - invalid combinations and invalid signed time deltas;
 - required and bounded text fields;
 - item-to-project ownership validation;
-- idempotent retries;
+- idempotent retries, including concurrent retries and replay after source deletion;
+- conflicts for changed input under an existing idempotency key;
+- concurrent retries with identical and conflicting input;
+- REST and MCP write-scope enforcement;
 - raw-event filtering and ordering;
-- aggregate counts, overlapping helpful/harmful sessions, rates, signed time totals, and net context value;
+- aggregate counts, overlapping helpful/harmful sessions, rates, and signed time totals;
 - zero-event reports; and
 - preservation of existing usage-report fields.
 

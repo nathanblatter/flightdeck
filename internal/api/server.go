@@ -159,6 +159,10 @@ func writeDBError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, service.ErrConflict.Error())
 		return
 	}
+	if errors.Is(err, service.ErrIdempotencyConflict) {
+		writeError(w, http.StatusConflict, service.ErrIdempotencyConflict.Error())
+		return
+	}
 	log.Printf("db error: %v", err)
 	writeError(w, http.StatusInternalServerError, "internal error")
 }

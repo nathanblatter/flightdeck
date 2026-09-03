@@ -114,7 +114,7 @@ Expected: compilation fails because the migration, generated store methods, and 
 
 - [ ] **Step 7: Add the migration and sqlc queries**
 
-Create `migrations/00013_context_effectiveness.sql` with `context_impact_events`, enum and sign CHECK constraints, indexes on `recorded_at`, `project`, and `(actor, session_id)`, plus a partial unique index on `(actor, idempotency_key)` when the key is non-null. Use text snapshots for `project` and `item`; do not add foreign keys.
+Create `migrations/00013_context_effectiveness.sql` with `context_impact_events`, enum and sign CHECK constraints, a normalized-request fingerprint, indexes on `recorded_at`, `project`, and `(actor, session_id)`, plus a partial unique index on `(actor, idempotency_key)` when the key is non-null. Use text snapshots for `project` and `item`; do not add foreign keys.
 
 Create `internal/store/queries/context_impact.sql` with:
 
@@ -122,9 +122,10 @@ Create `internal/store/queries/context_impact.sql` with:
 -- name: CreateContextImpactEvent :one
 INSERT INTO context_impact_events
     (actor, session_id, project, item, effect, mechanism, context_refs,
-     evidence, estimated_minutes_delta, idempotency_key)
+     evidence, estimated_minutes_delta, idempotency_key, request_fingerprint)
 VALUES ($1, $2, $3, sqlc.narg('item'), $4, $5, $6, $7,
-        sqlc.narg('estimated_minutes_delta'), sqlc.narg('idempotency_key'))
+        sqlc.narg('estimated_minutes_delta'), sqlc.narg('idempotency_key'),
+        sqlc.arg('request_fingerprint'))
 RETURNING *;
 
 -- name: GetContextImpactByIdempotencyKey :one
@@ -149,7 +150,7 @@ Expected: generated store types and methods compile without manual edits.
 
 - [ ] **Step 9: Implement idempotent persistence and ownership validation**
 
-Implement `RecordContextImpact` by validating and normalizing input, resolving the project, resolving an optional item by UUID or short ref, verifying `item.ProjectID == project.ID`, checking an existing actor/idempotency key, inserting, and recovering from a unique-key race by reading the winning row. Wrap validation and project/item mismatch errors with `ErrInvalidContextImpact`; preserve `pgx.ErrNoRows` for unknown projects or items so transports can distinguish 400 from 404.
+Implement `RecordContextImpact` by validating and normalizing input, hashing the normalized request, checking an existing actor/idempotency key before resolving source records, resolving the project and optional item by UUID or short ref, verifying `item.ProjectID == project.ID`, inserting, and recovering from a unique-key race by reading the winning row. Return the prior event only when its fingerprint matches; return `ErrIdempotencyConflict` for changed input. Wrap validation and project/item mismatch errors with `ErrInvalidContextImpact`; preserve `pgx.ErrNoRows` for unknown projects or items so transports can distinguish 400 from 404.
 
 - [ ] **Step 10: Run focused persistence tests and verify GREEN**
 
@@ -180,7 +181,7 @@ git commit -m "feat: record context impact events"
 
 - [ ] **Step 1: Write failing REST contract tests**
 
-Extend `internal/integration/context_impact_test.go` to start the real API with a read/write key. Assert a valid POST returns 201, an idempotent replay returns 200 with the same ID, a malformed combination returns 400, an unknown project/item returns 404, a cross-project item returns 400, and a filtered GET returns only matching raw events in newest-first order.
+Extend `internal/integration/context_impact_test.go` to start the real API with a read/write key. Assert a valid POST returns 201, an identical idempotent replay returns 200 with the same ID, changed input returns 409, a malformed combination returns 400, an unknown project/item returns 404, a cross-project item returns 400, route scopes and query bounds are enforced, and a filtered GET returns only matching raw events in newest-first order.
 
 - [ ] **Step 2: Run REST tests and verify RED**
 
@@ -216,7 +217,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Write a failing MCP contract test**
 
-Extend `internal/integration/mcp_payload_test.go` to invoke `record_context_impact` against the real MCP server, decode its one text-content JSON result, and assert the stored actor, project, effect, mechanism, evidence, and event ID.
+Extend `internal/integration/mcp_payload_test.go` to invoke `record_context_impact` against the real MCP server behind the production write-scope middleware, reject a read-only key, decode its one text-content JSON result, and assert the authenticated actor, project, effect, mechanism, evidence, and event ID.
 
 - [ ] **Step 6: Run the MCP test and verify RED**
 
@@ -255,7 +256,7 @@ git commit -m "feat: expose context impact reporting"
 
 - [ ] **Step 1: Write failing aggregate tests**
 
-Extend `TestUsageAnalytics` with events from multiple actors and repeated session IDs. Include one mixed helpful/harmful session and assert reported/helpful/harmful session counts, contribution/prevented-error/duplicate-avoidance/harm rates, net signed minutes, and net context value. Add a zero-event assertion that every rate and count is zero while the measurement basis remains populated.
+Extend `TestUsageAnalytics` with events from multiple actors and repeated session IDs. Include one mixed helpful/harmful session and assert reported/helpful/harmful session counts, contribution/prevented-error/duplicate-avoidance/harm rates, and net signed minutes. Add a zero-event assertion that every rate and count is zero while the measurement basis remains populated.
 
 - [ ] **Step 2: Run aggregate tests and verify RED**
 
@@ -265,7 +266,7 @@ Expected: compilation fails because `UsageReport.ContextEffectiveness` does not 
 
 - [ ] **Step 3: Add the effectiveness DTO and usage aggregation**
 
-Define `dto.ContextEffectiveness` with measurement basis, session counts, rates, estimated net minutes, and net context value. Fetch the SQL summary alongside existing usage queries in the `errgroup`. Calculate rates through one zero-safe helper, and calculate net context value as prevented-error sessions plus duplicate-work-avoided sessions minus harmful sessions.
+Define `dto.ContextEffectiveness` with measurement basis, session counts, rates, and estimated net minutes. Fetch the SQL summary alongside existing usage queries in the `errgroup`. Calculate rates through one zero-safe helper. Do not combine overlapping mechanisms into a synthetic net-value score.
 
 ```go
 type ContextEffectiveness struct {
@@ -281,7 +282,6 @@ type ContextEffectiveness struct {
 	DuplicateWorkAvoidanceRate   float64 `json:"duplicate_work_avoidance_rate"`
 	HarmRate                     float64 `json:"harm_rate"`
 	EstimatedMinutesNet          int     `json:"estimated_minutes_net"`
-	NetContextValue              int     `json:"net_context_value"`
 }
 ```
 
