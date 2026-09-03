@@ -98,3 +98,39 @@ func TestMCPResultsSingleEncoded(t *testing.T) {
 		t.Errorf("full global should include instructions")
 	}
 }
+
+func TestMCPRecordContextImpact(t *testing.T) {
+	st, svc := setup(t)
+	mkProject(t, st, "alpha")
+	srv := httptest.NewServer(mcp.NewHandler(st, svc, "test", nil))
+	defer srv.Close()
+
+	res := callTool(t, srv.URL, "record_context_impact", map[string]any{
+		"session_id": "mcp-session", "project": "alpha",
+		"effect": "harmful", "mechanism": "stale_or_incorrect",
+		"context_refs":            []string{"alpha summary"},
+		"evidence":                "the summary contained an outdated claim",
+		"estimated_minutes_delta": -5,
+	})
+	if len(res.Content) != 1 {
+		t.Fatalf("want one result block, got %d", len(res.Content))
+	}
+	var event struct {
+		ID, Actor, Project, Effect, Mechanism, Evidence string
+	}
+	text, ok := res.Content[0].(*mcpsdk.TextContent)
+	if !ok {
+		t.Fatalf("want TextContent, got %T", res.Content[0])
+	}
+	if err := json.Unmarshal([]byte(text.Text), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.ID == "" || event.Actor != "unknown" || event.Project != "alpha" ||
+		event.Effect != "harmful" || event.Mechanism != "stale_or_incorrect" ||
+		event.Evidence != "the summary contained an outdated claim" {
+		t.Fatalf("event = %+v", event)
+	}
+	if n := countRows(t, st, `SELECT count(*) FROM context_impact_events`); n != 1 {
+		t.Fatalf("impact rows = %d, want 1", n)
+	}
+}

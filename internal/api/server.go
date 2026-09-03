@@ -103,6 +103,8 @@ func (s *Server) Routes() http.Handler {
 
 	// usage analytics (how agents use the service)
 	mux.Handle("GET /usage", read(s.usageReport))
+	mux.Handle("GET /context-impact", read(s.listContextImpact))
+	mux.Handle("POST /context-impact", write(s.createContextImpact))
 
 	// ingest — public, cross-origin, and rate-limited (its key is embedded in
 	// public HTML). CORS wraps the outside so the preflight skips auth.

@@ -344,6 +344,43 @@ type SearchResults struct {
 	Activity []Activity `json:"activity"`
 }
 
+// ContextImpactEvent is an agent-reported outcome attributed to retrieved
+// Flightdeck context. It is evidence for usefulness analysis, not causal proof.
+type ContextImpactEvent struct {
+	ID                    string    `json:"id"`
+	RecordedAt            time.Time `json:"recorded_at"`
+	Actor                 string    `json:"actor"`
+	SessionID             string    `json:"session_id"`
+	Project               string    `json:"project"`
+	Item                  *string   `json:"item,omitempty"`
+	Effect                string    `json:"effect"`
+	Mechanism             string    `json:"mechanism"`
+	ContextRefs           []string  `json:"context_refs"`
+	Evidence              string    `json:"evidence"`
+	EstimatedMinutesDelta *int32    `json:"estimated_minutes_delta,omitempty"`
+}
+
+func ToContextImpactEvent(event store.ContextImpactEvent) ContextImpactEvent {
+	refs := event.ContextRefs
+	if refs == nil {
+		refs = []string{}
+	}
+	return ContextImpactEvent{
+		ID: event.ID.String(), RecordedAt: event.RecordedAt, Actor: event.Actor,
+		SessionID: event.SessionID, Project: event.Project, Item: event.Item,
+		Effect: event.Effect, Mechanism: event.Mechanism, ContextRefs: refs,
+		Evidence: event.Evidence, EstimatedMinutesDelta: event.EstimatedMinutesDelta,
+	}
+}
+
+func ToContextImpactEvents(events []store.ContextImpactEvent) []ContextImpactEvent {
+	out := make([]ContextImpactEvent, len(events))
+	for i, event := range events {
+		out[i] = ToContextImpactEvent(event)
+	}
+	return out
+}
+
 // ItemsPage is a paginated slice of items. NextOffset is non-nil when more rows
 // remain — pass it back as the cursor to fetch the following page.
 type ItemsPage struct {
