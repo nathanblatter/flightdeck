@@ -43,7 +43,9 @@ docker compose exec flightdeck flightdeck keys revoke <id>
 
 ## HTTP API (`/api`)
 
-- `GET/POST /projects`, `GET/PATCH /projects/{slug}`
+- `GET/POST /projects`, `GET/PATCH /projects/{slug}` — projects can nest into a
+  tree via `parent` (a project slug; PATCH `""` re-roots, cycles are rejected
+  with 400); `GET /context/{slug}` lists direct `children`
 - `GET/POST /items`, `GET/PATCH/DELETE /items/{id}` (filters: project, status, type, assignee, tag, q, updated_since)
 - `GET/POST /activity` (filters: project, item_id, kind, since)
 - `GET/POST /context-impact` — audit and record agent-reported helpful, ignored, or harmful context outcomes (`GET` filters: days, project, limit)

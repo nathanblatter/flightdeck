@@ -155,7 +155,7 @@ func (q *Queries) ListStaleInProgress(ctx context.Context, updatedAt time.Time) 
 }
 
 const listStaleProjectSummaries = `-- name: ListStaleProjectSummaries :many
-SELECT p.id, p.slug, p.name, p.status, p.summary, p.repo_url, p.site_url, p.created_at, p.updated_at, p.instructions, p.item_seq, p.aliases, max(a.created_at)::timestamptz AS last_activity
+SELECT p.id, p.slug, p.name, p.status, p.summary, p.repo_url, p.site_url, p.created_at, p.updated_at, p.instructions, p.item_seq, p.aliases, p.parent_slug, max(a.created_at)::timestamptz AS last_activity
 FROM projects p
 JOIN activity a ON a.project_id = p.id
 WHERE p.status = 'active'
@@ -177,6 +177,7 @@ type ListStaleProjectSummariesRow struct {
 	Instructions string    `json:"instructions"`
 	ItemSeq      int64     `json:"item_seq"`
 	Aliases      []string  `json:"aliases"`
+	ParentSlug   *string   `json:"parent_slug"`
 	LastActivity time.Time `json:"last_activity"`
 }
 
@@ -203,6 +204,7 @@ func (q *Queries) ListStaleProjectSummaries(ctx context.Context) ([]ListStalePro
 			&i.Instructions,
 			&i.ItemSeq,
 			&i.Aliases,
+			&i.ParentSlug,
 			&i.LastActivity,
 		); err != nil {
 			return nil, err

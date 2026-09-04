@@ -10,7 +10,7 @@ import {
   type Project,
   type SetupStatus,
 } from "./api";
-import { updateNotice } from "./lib";
+import { projectTreeOrder, updateNotice } from "./lib";
 import { SetupWizard } from "./components/SetupWizard";
 import { Board } from "./components/Board";
 import { ActivityFeed } from "./components/ActivityFeed";
@@ -268,8 +268,10 @@ function Dashboard({
           onChange={(e) => setProjectFilter(e.target.value)}
         >
           <option value="">All projects</option>
-          {projects.map((p) => (
+          {projectTreeOrder(projects).map(({ project: p, depth }) => (
             <option key={p.slug} value={p.slug}>
+              {" ".repeat(depth)}
+              {depth > 0 && "└ "}
               {p.name}
             </option>
           ))}
@@ -305,7 +307,9 @@ function Dashboard({
           onDone={() => setAdding(false)}
         />
       )}
-      {addingProject && <NewProject onDone={() => setAddingProject(false)} />}
+      {addingProject && (
+        <NewProject projects={projects} onDone={() => setAddingProject(false)} />
+      )}
 
       <main className="content">
         {projectsQ.isLoading ? (
@@ -330,7 +334,12 @@ function Dashboard({
       </main>
 
       {drawerSlug && (
-        <ProjectDrawer slug={drawerSlug} onClose={() => setDrawerSlug(null)} />
+        <ProjectDrawer
+          slug={drawerSlug}
+          projects={projects}
+          onOpenProject={setDrawerSlug}
+          onClose={() => setDrawerSlug(null)}
+        />
       )}
       {linksItem && (
         <ItemLinksModal item={linksItem} onClose={() => setLinksItem(null)} />

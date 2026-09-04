@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -322,6 +323,7 @@ type createProjectIn struct {
 	Aliases      []string `json:"aliases,omitempty" jsonschema:"alternate names/repo-dir names so resolve_project can match this project from a path (e.g. Survivor50Draft)"`
 	RepoURL      *string  `json:"repo_url,omitempty"`
 	SiteURL      *string  `json:"site_url,omitempty"`
+	Parent       *string  `json:"parent,omitempty" jsonschema:"slug of an existing project to nest this one under (projects form a tree; omit for a root)"`
 }
 
 type setInstructionsIn struct {
@@ -775,6 +777,14 @@ func (h *handlers) createProject(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	if err := service.ValidateProjectStatus(in.Status); err != nil {
 		return dto.Project{}, err
 	}
+	var parent *string
+	if in.Parent != nil && strings.TrimSpace(*in.Parent) != "" {
+		if err := h.svc.ValidateProjectParent(ctx, in.Slug, *in.Parent); err != nil {
+			return dto.Project{}, err
+		}
+		trimmed := strings.TrimSpace(*in.Parent)
+		parent = &trimmed
+	}
 	p, err := h.st.CreateProject(ctx, store.CreateProjectParams{
 		Slug:         in.Slug,
 		Name:         in.Name,
@@ -784,6 +794,7 @@ func (h *handlers) createProject(ctx context.Context, _ *mcpsdk.CallToolRequest,
 		Aliases:      in.Aliases,
 		RepoUrl:      optStr(in.RepoURL),
 		SiteUrl:      optStr(in.SiteURL),
+		ParentSlug:   parent,
 	})
 	if err != nil {
 		return dto.Project{}, err

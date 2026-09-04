@@ -75,6 +75,7 @@ type Querier interface {
 	// For a project, the active "blocks" edges: each row means blocked_id is blocked
 	// by blocker_id (whose status is still open). Used to flag non-ready open items.
 	ListBlockingEdgesByProject(ctx context.Context, projectID uuid.UUID) ([]ListBlockingEdgesByProjectRow, error)
+	ListChildProjects(ctx context.Context, parentSlug *string) ([]ListChildProjectsRow, error)
 	ListContextImpactEvents(ctx context.Context, arg ListContextImpactEventsParams) ([]ContextImpactEvent, error)
 	// Dead-lettered / erroring events for operator visibility (last_error set).
 	ListFailedWebhookEvents(ctx context.Context, limit int32) ([]WebhookEvent, error)
@@ -118,6 +119,10 @@ type Querier interface {
 	// Dead-letter: attempts exhausted. Distinct from delivered_at so the two states
 	// can't be conflated; the row stays visible for the operator dead-letter view.
 	ParkWebhookEvent(ctx context.Context, arg ParkWebhookEventParams) error
+	// Slugs of the subtree rooted at $1, root included. UNION (not UNION ALL)
+	// deduplicates, so this terminates even if a concurrent parent change ever
+	// raced a cycle past validation.
+	ProjectDescendants(ctx context.Context, slug string) ([]string, error)
 	PurgeDeliveredWebhookEvents(ctx context.Context, deliveredAt *time.Time) (int64, error)
 	// Trim low-signal activity (comments and auto 'created' rows) older than the
 	// cutoff. Decisions, progress, status changes, and rejections are kept — they
@@ -167,6 +172,8 @@ type Querier interface {
 	// Bumps version on every write. When expected_version is supplied it acts as a
 	// compare-and-swap: a mismatch matches no row (caller maps that to a conflict).
 	UpdateItem(ctx context.Context, arg UpdateItemParams) (Item, error)
+	// parent_slug needs a tri-state (leave / set / clear) that COALESCE can't
+	// express, so set_parent gates the change and parent_slug carries set-vs-clear.
 	UpdateProject(ctx context.Context, arg UpdateProjectParams) (Project, error)
 	UpdateProjectSummary(ctx context.Context, arg UpdateProjectSummaryParams) (Project, error)
 	UpsertSetting(ctx context.Context, arg UpsertSettingParams) error

@@ -12,7 +12,7 @@ ORDER BY
     updated_at DESC;
 
 -- name: CreateProject :one
-INSERT INTO projects (slug, name, status, summary, instructions, repo_url, site_url, aliases)
+INSERT INTO projects (slug, name, status, summary, instructions, repo_url, site_url, aliases, parent_slug)
 VALUES (
     $1,
     $2,
@@ -21,11 +21,14 @@ VALUES (
     COALESCE(sqlc.narg('instructions')::text, ''),
     sqlc.narg('repo_url'),
     sqlc.narg('site_url'),
-    COALESCE(sqlc.narg('aliases')::text[], '{}')
+    COALESCE(sqlc.narg('aliases')::text[], '{}'),
+    sqlc.narg('parent_slug')
 )
 RETURNING *;
 
 -- name: UpdateProject :one
+-- parent_slug needs a tri-state (leave / set / clear) that COALESCE can't
+-- express, so set_parent gates the change and parent_slug carries set-vs-clear.
 UPDATE projects SET
     name         = COALESCE(sqlc.narg('name')::text, name),
     status       = COALESCE(sqlc.narg('status')::text, status),
@@ -34,9 +37,28 @@ UPDATE projects SET
     repo_url     = COALESCE(sqlc.narg('repo_url')::text, repo_url),
     site_url     = COALESCE(sqlc.narg('site_url')::text, site_url),
     aliases      = COALESCE(sqlc.narg('aliases')::text[], aliases),
+    parent_slug  = CASE WHEN sqlc.arg('set_parent')::bool
+                        THEN sqlc.narg('parent_slug')::text
+                        ELSE parent_slug END,
     updated_at   = now()
 WHERE slug = sqlc.arg('slug')
 RETURNING *;
+
+-- name: ProjectDescendants :many
+-- Slugs of the subtree rooted at $1, root included. UNION (not UNION ALL)
+-- deduplicates, so this terminates even if a concurrent parent change ever
+-- raced a cycle past validation.
+WITH RECURSIVE subtree (slug) AS (
+    SELECT root.slug FROM projects root WHERE root.slug = $1
+    UNION
+    SELECT p.slug FROM projects p JOIN subtree s ON p.parent_slug = s.slug
+)
+SELECT s.slug FROM subtree s;
+
+-- name: ListChildProjects :many
+SELECT slug, name, status, summary FROM projects
+WHERE parent_slug = $1
+ORDER BY name;
 
 -- name: UpdateProjectSummary :one
 UPDATE projects SET summary = $2, updated_at = now()

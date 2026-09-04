@@ -29,11 +29,21 @@ export interface Project {
   slug: string;
   name: string;
   status: ProjectStatus;
+  // Slug of the parent project when nested in a tree; absent for roots.
+  parent?: string;
   summary: string;
   repo_url?: string;
   site_url?: string;
   created_at: string;
   updated_at: string;
+}
+
+// ProjectBrief is the slim child listing in a project context.
+export interface ProjectBrief {
+  slug: string;
+  name: string;
+  status: ProjectStatus;
+  summary?: string;
 }
 
 export interface Item {
@@ -131,6 +141,7 @@ export interface ProjectContext {
   // since (high count ⇒ treat it as stale).
   summary_updated_at: string;
   activities_since_summary: number;
+  children?: ProjectBrief[];
 }
 
 export interface SearchResults {
@@ -308,8 +319,9 @@ export const api = {
   projectContext: (slug: string) =>
     req<ProjectContext>("GET", `/context/${slug}`),
   webhookEvents: () => req<WebhookEvent[]>("GET", "/webhooks/events"),
-  patchProject: (slug: string, body: Partial<Pick<Project, "name" | "status" | "summary" | "repo_url" | "site_url">>) =>
+  // `parent` is tri-state: omit = leave, "" = clear (make root), slug = nest.
+  patchProject: (slug: string, body: Partial<Pick<Project, "name" | "status" | "summary" | "repo_url" | "site_url" | "parent">>) =>
     req<Project>("PATCH", `/projects/${slug}`, body),
-  createProject: (body: { slug: string; name: string; summary?: string }) =>
+  createProject: (body: { slug: string; name: string; summary?: string; parent?: string }) =>
     req<Project>("POST", "/projects", body),
 };

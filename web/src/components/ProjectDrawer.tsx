@@ -1,13 +1,17 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api";
-import { projectColor, relativeTime, TYPE_GLYPH } from "../lib";
+import { api, type Project } from "../api";
+import { projectColor, projectTreeOrder, relativeTime, TYPE_GLYPH } from "../lib";
 
 export function ProjectDrawer({
   slug,
+  projects,
+  onOpenProject,
   onClose,
 }: {
   slug: string;
+  projects: Project[];
+  onOpenProject: (slug: string) => void;
   onClose: () => void;
 }) {
   const qc = useQueryClient();
@@ -34,6 +38,32 @@ export function ProjectDrawer({
     },
   });
 
+  // "" clears the parent (back to root); the server rejects cycles with a 400.
+  const setParent = useMutation({
+    mutationFn: (parent: string) => api.patchProject(slug, { parent }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["context"] });
+      qc.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+
+  // A project can't be its own parent, and nesting under a descendant would
+  // cycle — filter both out so the picker only offers legal parents.
+  const descendants = new Set<string>([slug]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const p of projects) {
+      if (p.parent && descendants.has(p.parent) && !descendants.has(p.slug)) {
+        descendants.add(p.slug);
+        grew = true;
+      }
+    }
+  }
+  const parentChoices = projectTreeOrder(
+    projects.filter((p) => !descendants.has(p.slug)),
+  );
+
   return (
     <div className="drawer-backdrop" onClick={onClose}>
       <aside className="drawer" onClick={(e) => e.stopPropagation()}>
@@ -42,6 +72,16 @@ export function ProjectDrawer({
         ) : (
           <>
             <header className="drawer-head">
+              {data.project.parent && (
+                <button
+                  className="project-chip"
+                  style={{ background: projectColor(data.project.parent) }}
+                  title="Open parent project"
+                  onClick={() => onOpenProject(data.project.parent!)}
+                >
+                  {data.project.parent} ›
+                </button>
+              )}
               <span
                 className="project-chip"
                 style={{ background: projectColor(data.project.slug) }}
@@ -53,6 +93,50 @@ export function ProjectDrawer({
                 ✕
               </button>
             </header>
+
+            <section>
+              <label className="field-label">Parent project</label>
+              <select
+                value={data.project.parent ?? ""}
+                disabled={setParent.isPending}
+                onChange={(e) => setParent.mutate(e.target.value)}
+              >
+                <option value="">None (root)</option>
+                {parentChoices.map(({ project: p, depth }) => (
+                  <option key={p.slug} value={p.slug}>
+                    {" ".repeat(depth)}
+                    {depth > 0 && "└ "}
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              {setParent.isError && (
+                <span className="muted sm">
+                  {(setParent.error as Error).message}
+                </span>
+              )}
+            </section>
+
+            {data.children && data.children.length > 0 && (
+              <section>
+                <h3 className="section-title">
+                  Sub-projects <span className="muted">({data.children.length})</span>
+                </h3>
+                <div className="chip-row">
+                  {data.children.map((c) => (
+                    <button
+                      key={c.slug}
+                      className="project-chip"
+                      style={{ background: projectColor(c.slug) }}
+                      title={c.summary || c.name}
+                      onClick={() => onOpenProject(c.slug)}
+                    >
+                      {c.name}
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
 
             <section>
               <label className="field-label">

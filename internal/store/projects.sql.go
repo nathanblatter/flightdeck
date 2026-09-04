@@ -79,7 +79,7 @@ func (q *Queries) CountItemsByStatusForProject(ctx context.Context, projectID uu
 }
 
 const createProject = `-- name: CreateProject :one
-INSERT INTO projects (slug, name, status, summary, instructions, repo_url, site_url, aliases)
+INSERT INTO projects (slug, name, status, summary, instructions, repo_url, site_url, aliases, parent_slug)
 VALUES (
     $1,
     $2,
@@ -88,9 +88,10 @@ VALUES (
     COALESCE($5::text, ''),
     $6,
     $7,
-    COALESCE($8::text[], '{}')
+    COALESCE($8::text[], '{}'),
+    $9
 )
-RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases
+RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug
 `
 
 type CreateProjectParams struct {
@@ -102,6 +103,7 @@ type CreateProjectParams struct {
 	RepoUrl      *string  `json:"repo_url"`
 	SiteUrl      *string  `json:"site_url"`
 	Aliases      []string `json:"aliases"`
+	ParentSlug   *string  `json:"parent_slug"`
 }
 
 func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error) {
@@ -114,6 +116,7 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		arg.RepoUrl,
 		arg.SiteUrl,
 		arg.Aliases,
+		arg.ParentSlug,
 	)
 	var i Project
 	err := row.Scan(
@@ -129,12 +132,13 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.Instructions,
 		&i.ItemSeq,
 		&i.Aliases,
+		&i.ParentSlug,
 	)
 	return i, err
 }
 
 const getProjectByID = `-- name: GetProjectByID :one
-SELECT id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases FROM projects WHERE id = $1
+SELECT id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug FROM projects WHERE id = $1
 `
 
 func (q *Queries) GetProjectByID(ctx context.Context, id uuid.UUID) (Project, error) {
@@ -153,12 +157,13 @@ func (q *Queries) GetProjectByID(ctx context.Context, id uuid.UUID) (Project, er
 		&i.Instructions,
 		&i.ItemSeq,
 		&i.Aliases,
+		&i.ParentSlug,
 	)
 	return i, err
 }
 
 const getProjectBySlug = `-- name: GetProjectBySlug :one
-SELECT id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases FROM projects WHERE slug = $1
+SELECT id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug FROM projects WHERE slug = $1
 `
 
 func (q *Queries) GetProjectBySlug(ctx context.Context, slug string) (Project, error) {
@@ -177,12 +182,51 @@ func (q *Queries) GetProjectBySlug(ctx context.Context, slug string) (Project, e
 		&i.Instructions,
 		&i.ItemSeq,
 		&i.Aliases,
+		&i.ParentSlug,
 	)
 	return i, err
 }
 
+const listChildProjects = `-- name: ListChildProjects :many
+SELECT slug, name, status, summary FROM projects
+WHERE parent_slug = $1
+ORDER BY name
+`
+
+type ListChildProjectsRow struct {
+	Slug    string `json:"slug"`
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Summary string `json:"summary"`
+}
+
+func (q *Queries) ListChildProjects(ctx context.Context, parentSlug *string) ([]ListChildProjectsRow, error) {
+	rows, err := q.db.Query(ctx, listChildProjects, parentSlug)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListChildProjectsRow
+	for rows.Next() {
+		var i ListChildProjectsRow
+		if err := rows.Scan(
+			&i.Slug,
+			&i.Name,
+			&i.Status,
+			&i.Summary,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjects = `-- name: ListProjects :many
-SELECT id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases FROM projects
+SELECT id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug FROM projects
 WHERE ($1::text IS NULL OR status = $1)
 ORDER BY
     CASE status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 WHEN 'done' THEN 2 ELSE 3 END,
@@ -211,6 +255,7 @@ func (q *Queries) ListProjects(ctx context.Context, status *string) ([]Project, 
 			&i.Instructions,
 			&i.ItemSeq,
 			&i.Aliases,
+			&i.ParentSlug,
 		); err != nil {
 			return nil, err
 		}
@@ -222,10 +267,42 @@ func (q *Queries) ListProjects(ctx context.Context, status *string) ([]Project, 
 	return items, nil
 }
 
+const projectDescendants = `-- name: ProjectDescendants :many
+WITH RECURSIVE subtree (slug) AS (
+    SELECT root.slug FROM projects root WHERE root.slug = $1
+    UNION
+    SELECT p.slug FROM projects p JOIN subtree s ON p.parent_slug = s.slug
+)
+SELECT s.slug FROM subtree s
+`
+
+// Slugs of the subtree rooted at $1, root included. UNION (not UNION ALL)
+// deduplicates, so this terminates even if a concurrent parent change ever
+// raced a cycle past validation.
+func (q *Queries) ProjectDescendants(ctx context.Context, slug string) ([]string, error) {
+	rows, err := q.db.Query(ctx, projectDescendants, slug)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			return nil, err
+		}
+		items = append(items, slug)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setProjectInstructions = `-- name: SetProjectInstructions :one
 UPDATE projects SET instructions = $2, updated_at = now()
 WHERE slug = $1
-RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases
+RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug
 `
 
 type SetProjectInstructionsParams struct {
@@ -249,6 +326,7 @@ func (q *Queries) SetProjectInstructions(ctx context.Context, arg SetProjectInst
 		&i.Instructions,
 		&i.ItemSeq,
 		&i.Aliases,
+		&i.ParentSlug,
 	)
 	return i, err
 }
@@ -262,9 +340,12 @@ UPDATE projects SET
     repo_url     = COALESCE($5::text, repo_url),
     site_url     = COALESCE($6::text, site_url),
     aliases      = COALESCE($7::text[], aliases),
+    parent_slug  = CASE WHEN $8::bool
+                        THEN $9::text
+                        ELSE parent_slug END,
     updated_at   = now()
-WHERE slug = $8
-RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases
+WHERE slug = $10
+RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug
 `
 
 type UpdateProjectParams struct {
@@ -275,9 +356,13 @@ type UpdateProjectParams struct {
 	RepoUrl      *string  `json:"repo_url"`
 	SiteUrl      *string  `json:"site_url"`
 	Aliases      []string `json:"aliases"`
+	SetParent    bool     `json:"set_parent"`
+	ParentSlug   *string  `json:"parent_slug"`
 	Slug         string   `json:"slug"`
 }
 
+// parent_slug needs a tri-state (leave / set / clear) that COALESCE can't
+// express, so set_parent gates the change and parent_slug carries set-vs-clear.
 func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (Project, error) {
 	row := q.db.QueryRow(ctx, updateProject,
 		arg.Name,
@@ -287,6 +372,8 @@ func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (P
 		arg.RepoUrl,
 		arg.SiteUrl,
 		arg.Aliases,
+		arg.SetParent,
+		arg.ParentSlug,
 		arg.Slug,
 	)
 	var i Project
@@ -303,6 +390,7 @@ func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (P
 		&i.Instructions,
 		&i.ItemSeq,
 		&i.Aliases,
+		&i.ParentSlug,
 	)
 	return i, err
 }
@@ -310,7 +398,7 @@ func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (P
 const updateProjectSummary = `-- name: UpdateProjectSummary :one
 UPDATE projects SET summary = $2, updated_at = now()
 WHERE slug = $1
-RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases
+RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug
 `
 
 type UpdateProjectSummaryParams struct {
@@ -334,6 +422,7 @@ func (q *Queries) UpdateProjectSummary(ctx context.Context, arg UpdateProjectSum
 		&i.Instructions,
 		&i.ItemSeq,
 		&i.Aliases,
+		&i.ParentSlug,
 	)
 	return i, err
 }

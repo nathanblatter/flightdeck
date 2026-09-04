@@ -243,6 +243,7 @@ func (s *Service) buildProjectContext(ctx context.Context, slug string, v Verbos
 		edges        []store.ListBlockingEdgesByProjectRow
 		rejected     []store.Activity
 		sinceSummary int64
+		children     []store.ListChildProjectsRow
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
@@ -267,6 +268,10 @@ func (s *Service) buildProjectContext(ctx context.Context, slug string, v Verbos
 	})
 	g.Go(func() (err error) {
 		sinceSummary, err = s.St.CountActivitySince(gctx, store.CountActivitySinceParams{ProjectID: p.ID, CreatedAt: p.UpdatedAt})
+		return
+	})
+	g.Go(func() (err error) {
+		children, err = s.St.ListChildProjects(gctx, &p.Slug)
 		return
 	})
 	if err := g.Wait(); err != nil {
@@ -299,6 +304,9 @@ func (s *Service) buildProjectContext(ctx context.Context, slug string, v Verbos
 		RejectedApproaches:     dto.ToActivitiesTrunc(rejected, actMax),
 		SummaryUpdatedAt:       p.UpdatedAt,
 		ActivitiesSinceSummary: int(sinceSummary),
+	}
+	if len(children) > 0 {
+		bundle.Children = dto.ToProjectBriefs(children)
 	}
 	s.cache.set(key, bundle)
 	return bundle, nil
