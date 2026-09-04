@@ -52,6 +52,40 @@ export function relativeTime(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
+// projectTreeOrder flattens the project tree depth-first for pickers: roots in
+// the given (server-ranked) order, each followed by its children, with depth
+// for indentation. A project whose parent isn't in the list (filtered out or
+// paused) renders as a root rather than disappearing; a stray cycle can't hang
+// the walk because visited nodes are never re-entered.
+export function projectTreeOrder<P extends { slug: string; parent?: string }>(
+  projects: P[],
+): { project: P; depth: number }[] {
+  const bySlug = new Set(projects.map((p) => p.slug));
+  const children = new Map<string, P[]>();
+  const roots: P[] = [];
+  for (const p of projects) {
+    if (p.parent && bySlug.has(p.parent)) {
+      const list = children.get(p.parent) ?? [];
+      list.push(p);
+      children.set(p.parent, list);
+    } else {
+      roots.push(p);
+    }
+  }
+  const out: { project: P; depth: number }[] = [];
+  const visited = new Set<string>();
+  const walk = (p: P, depth: number) => {
+    if (visited.has(p.slug)) return;
+    visited.add(p.slug);
+    out.push({ project: p, depth });
+    for (const c of children.get(p.slug) ?? []) walk(c, depth + 1);
+  };
+  for (const r of roots) walk(r, 0);
+  // Anything unvisited is inside an orphaned cycle — surface it flat.
+  for (const p of projects) walk(p, 0);
+  return out;
+}
+
 // updateNotice returns the banner line when the server reports a newer
 // published release, else null. The server (internal/update) already did the
 // semver comparison — an empty/absent latest_version means "current".

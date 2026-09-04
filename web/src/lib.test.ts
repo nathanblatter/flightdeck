@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { COLUMNS, PRIORITY_COLOR, PRIORITY_RANK, projectColor, relativeTime, updateNotice } from "./lib";
+import { COLUMNS, PRIORITY_COLOR, PRIORITY_RANK, projectColor, projectTreeOrder, relativeTime, updateNotice } from "./lib";
 
 describe("COLUMNS", () => {
   it("keeps board order and omits wontfix", () => {
@@ -66,6 +66,35 @@ describe("relativeTime", () => {
   it("falls back to a locale date after ~30 days", () => {
     const old = at(45 * 86_400_000);
     expect(relativeTime(old)).toBe(new Date(old).toLocaleDateString());
+  });
+});
+
+describe("projectTreeOrder", () => {
+  const p = (slug: string, parent?: string) => ({ slug, parent });
+
+  it("keeps flat lists in server order at depth 0", () => {
+    const flat = [p("a"), p("b"), p("c")];
+    expect(projectTreeOrder(flat)).toEqual(flat.map((project) => ({ project, depth: 0 })));
+  });
+
+  it("nests children under their parent depth-first", () => {
+    const out = projectTreeOrder([p("root"), p("other"), p("mid", "root"), p("leaf", "mid")]);
+    expect(out.map((e) => [e.project.slug, e.depth])).toEqual([
+      ["root", 0],
+      ["mid", 1],
+      ["leaf", 2],
+      ["other", 0],
+    ]);
+  });
+
+  it("treats a child whose parent is filtered out as a root", () => {
+    const out = projectTreeOrder([p("child", "hidden-parent")]);
+    expect(out).toEqual([{ project: p("child", "hidden-parent"), depth: 0 }]);
+  });
+
+  it("surfaces every project even in a stray cycle", () => {
+    const out = projectTreeOrder([p("a", "b"), p("b", "a")]);
+    expect(out.map((e) => e.project.slug).sort()).toEqual(["a", "b"]);
   });
 });
 

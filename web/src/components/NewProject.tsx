@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api";
+import { api, type Project } from "../api";
+import { projectTreeOrder } from "../lib";
 
 const slugify = (s: string) =>
   s
@@ -8,12 +9,19 @@ const slugify = (s: string) =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
-export function NewProject({ onDone }: { onDone: () => void }) {
+export function NewProject({
+  projects,
+  onDone,
+}: {
+  projects: Project[];
+  onDone: () => void;
+}) {
   const qc = useQueryClient();
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [slugEdited, setSlugEdited] = useState(false);
   const [summary, setSummary] = useState("");
+  const [parent, setParent] = useState("");
 
   const create = useMutation({
     mutationFn: () =>
@@ -21,6 +29,7 @@ export function NewProject({ onDone }: { onDone: () => void }) {
         slug: slug.trim(),
         name: name.trim(),
         summary: summary.trim() || undefined,
+        parent: parent || undefined,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["projects"] });
@@ -58,6 +67,16 @@ export function NewProject({ onDone }: { onDone: () => void }) {
         value={summary}
         onChange={(e) => setSummary(e.target.value)}
       />
+      <select value={parent} onChange={(e) => setParent(e.target.value)}>
+        <option value="">No parent</option>
+        {projectTreeOrder(projects).map(({ project: p, depth }) => (
+          <option key={p.slug} value={p.slug}>
+            {" ".repeat(depth)}
+            {depth > 0 && "└ "}
+            {p.name}
+          </option>
+        ))}
+      </select>
       <button
         className="btn primary"
         disabled={!name.trim() || !slug.trim() || create.isPending}

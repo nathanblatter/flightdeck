@@ -29,10 +29,13 @@ func toMeta(raw json.RawMessage) map[string]any {
 }
 
 type Project struct {
-	ID           string    `json:"id"`
-	Slug         string    `json:"slug"`
-	Name         string    `json:"name"`
-	Status       string    `json:"status"`
+	ID     string `json:"id"`
+	Slug   string `json:"slug"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	// Parent is the slug of the parent project when this project is part of a
+	// tree (e.g. a work area with sub-projects). Absent for roots.
+	Parent       *string   `json:"parent,omitempty"`
 	Summary      string    `json:"summary"`
 	Instructions string    `json:"instructions,omitempty"`
 	Aliases      []string  `json:"aliases,omitempty"`
@@ -48,8 +51,9 @@ func ToProject(p store.Project) Project {
 		aliases = p.Aliases
 	}
 	return Project{
-		ID: p.ID.String(), Slug: p.Slug, Name: p.Name, Status: p.Status, Summary: p.Summary,
-		Instructions: p.Instructions, Aliases: aliases, RepoURL: p.RepoUrl, SiteURL: p.SiteUrl,
+		ID: p.ID.String(), Slug: p.Slug, Name: p.Name, Status: p.Status, Parent: p.ParentSlug,
+		Summary: p.Summary, Instructions: p.Instructions, Aliases: aliases,
+		RepoURL: p.RepoUrl, SiteURL: p.SiteUrl,
 		CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
 	}
 }
@@ -316,6 +320,26 @@ type ProjectContext struct {
 	// happened since (high count = treat the summary as stale).
 	SummaryUpdatedAt       time.Time `json:"summary_updated_at"`
 	ActivitiesSinceSummary int       `json:"activities_since_summary"`
+	// Children are the direct sub-projects when this project parents a tree —
+	// briefs only; orient into a child for its full bundle.
+	Children []ProjectBrief `json:"children,omitempty"`
+}
+
+// ProjectBrief is the slim tree-navigation view of a project (drawer chips,
+// child listings) — enough to decide whether to orient into it.
+type ProjectBrief struct {
+	Slug    string `json:"slug"`
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Summary string `json:"summary,omitempty"`
+}
+
+func ToProjectBriefs(rows []store.ListChildProjectsRow) []ProjectBrief {
+	out := make([]ProjectBrief, len(rows))
+	for i, r := range rows {
+		out[i] = ProjectBrief{Slug: r.Slug, Name: r.Name, Status: r.Status, Summary: r.Summary}
+	}
+	return out
 }
 
 // ProjectOverview is one project's slice of the horizontal global view. Top

@@ -129,6 +129,7 @@ type Project struct {
 	Instructions string    `json:"instructions"`
 	ItemSeq      int64     `json:"item_seq"`
 	Aliases      []string  `json:"aliases"`
+	ParentSlug   *string   `json:"parent_slug"`
 }
 
 type SearchLog struct {
