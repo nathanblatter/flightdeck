@@ -1,6 +1,9 @@
 package service
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func strp(s string) *string { return &s }
 
@@ -99,5 +102,68 @@ func TestValidateProjectStatus(t *testing.T) {
 	}
 	if err := ValidateProjectStatus(nil); err != nil {
 		t.Fatalf("nil status should be skipped: %v", err)
+	}
+}
+
+func i32p(v int32) *int32 { return &v }
+
+func TestValidateContextImpactAcceptsContractCombinations(t *testing.T) {
+	valid := []ContextImpactInput{
+		{SessionID: "s1", Project: "alpha", Effect: "helpful", Mechanism: "decision_changed", Evidence: "changed the plan"},
+		{SessionID: "s1", Project: "alpha", Effect: "helpful", Mechanism: "prevented_error", Evidence: "avoided a bad write", EstimatedMinutesDelta: i32p(10)},
+		{SessionID: "s1", Project: "alpha", Effect: "helpful", Mechanism: "duplicate_work_avoided", Evidence: "found prior work"},
+		{SessionID: "s1", Project: "alpha", Effect: "helpful", Mechanism: "reconstruction_saved", Evidence: "loaded prior state"},
+		{SessionID: "s1", Project: "alpha", Effect: "neutral", Mechanism: "ignored", Evidence: "context was unrelated", EstimatedMinutesDelta: i32p(0)},
+		{SessionID: "s1", Project: "alpha", Effect: "harmful", Mechanism: "stale_or_incorrect", Evidence: "context was wrong", EstimatedMinutesDelta: i32p(-10)},
+	}
+	for _, input := range valid {
+		if err := ValidateContextImpact(input); err != nil {
+			t.Errorf("valid input rejected: %v", err)
+		}
+	}
+}
+
+func TestValidateContextImpactRejectsInvalidInput(t *testing.T) {
+	base := ContextImpactInput{
+		SessionID: "s1", Project: "alpha", Effect: "helpful",
+		Mechanism: "prevented_error", Evidence: "avoided a bad write",
+	}
+	tests := []struct {
+		name   string
+		mutate func(*ContextImpactInput)
+	}{
+		{"blank session", func(in *ContextImpactInput) { in.SessionID = "  " }},
+		{"long session", func(in *ContextImpactInput) { in.SessionID = strings.Repeat("s", 201) }},
+		{"blank project", func(in *ContextImpactInput) { in.Project = "" }},
+		{"blank evidence", func(in *ContextImpactInput) { in.Evidence = "\n" }},
+		{"long evidence", func(in *ContextImpactInput) { in.Evidence = strings.Repeat("e", 2001) }},
+		{"invalid effect", func(in *ContextImpactInput) { in.Effect = "good" }},
+		{"invalid mechanism", func(in *ContextImpactInput) { in.Mechanism = "remembered" }},
+		{"invalid pair", func(in *ContextImpactInput) { in.Effect = "harmful" }},
+		{"too many refs", func(in *ContextImpactInput) { in.ContextRefs = make([]string, 21) }},
+		{"long ref", func(in *ContextImpactInput) { in.ContextRefs = []string{strings.Repeat("r", 201)} }},
+		{"long idempotency key", func(in *ContextImpactInput) { key := strings.Repeat("k", 201); in.IdempotencyKey = &key }},
+		{"delta above maximum", func(in *ContextImpactInput) { in.EstimatedMinutesDelta = i32p(1441) }},
+		{"delta below minimum", func(in *ContextImpactInput) { in.EstimatedMinutesDelta = i32p(-1441) }},
+		{"helpful negative delta", func(in *ContextImpactInput) { in.EstimatedMinutesDelta = i32p(-1) }},
+		{"neutral positive delta", func(in *ContextImpactInput) {
+			in.Effect = "neutral"
+			in.Mechanism = "ignored"
+			in.EstimatedMinutesDelta = i32p(1)
+		}},
+		{"harmful positive delta", func(in *ContextImpactInput) {
+			in.Effect = "harmful"
+			in.Mechanism = "stale_or_incorrect"
+			in.EstimatedMinutesDelta = i32p(1)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := base
+			tt.mutate(&input)
+			if err := ValidateContextImpact(input); err == nil {
+				t.Fatal("invalid input was accepted")
+			}
+		})
 	}
 }

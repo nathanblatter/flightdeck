@@ -34,7 +34,7 @@ func setup(t testing.TB) (*store.Store, *service.Service) {
 	}
 	t.Cleanup(st.Close)
 	_, err = st.Pool.Exec(context.Background(),
-		`TRUNCATE webhook_events, activity, item_links, item_refs, items, webhooks, projects RESTART IDENTITY CASCADE`)
+		`TRUNCATE context_impact_events, webhook_events, activity, item_links, item_refs, items, webhooks, projects RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}

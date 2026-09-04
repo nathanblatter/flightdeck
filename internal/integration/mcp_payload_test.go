@@ -3,12 +3,14 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"flightdeck/internal/auth"
 	"flightdeck/internal/mcp"
 	"flightdeck/internal/store"
 )
@@ -17,10 +19,14 @@ func ptr[T any](v T) *T { return &v }
 
 // callTool runs one tools/call against a real MCP server over streamable HTTP.
 func callTool(t *testing.T, url, tool string, args map[string]any) *mcpsdk.CallToolResult {
+	return callToolWithClient(t, url, tool, args, nil)
+}
+
+func callToolWithClient(t *testing.T, url, tool string, args map[string]any, httpClient *http.Client) *mcpsdk.CallToolResult {
 	t.Helper()
 	ctx := context.Background()
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test", Version: "0"}, nil)
-	sess, err := client.Connect(ctx, &mcpsdk.StreamableClientTransport{Endpoint: url}, nil)
+	sess, err := client.Connect(ctx, &mcpsdk.StreamableClientTransport{Endpoint: url, HTTPClient: httpClient}, nil)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -33,6 +39,16 @@ func callTool(t *testing.T, url, tool string, args map[string]any) *mcpsdk.CallT
 		t.Fatalf("call %s returned tool error: %+v", tool, res.Content)
 	}
 	return res
+}
+
+type apiKeyTransport struct {
+	key string
+}
+
+func (t apiKeyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Set("X-API-Key", t.key)
+	return http.DefaultTransport.RoundTrip(req)
 }
 
 // Tool results must carry their JSON exactly once — a single text block, no
@@ -96,5 +112,69 @@ func TestMCPResultsSingleEncoded(t *testing.T) {
 	full := res.Content[0].(*mcpsdk.TextContent).Text
 	if !strings.Contains(full, "build with care.") {
 		t.Errorf("full global should include instructions")
+	}
+}
+
+func TestMCPRecordContextImpact(t *testing.T) {
+	st, svc := setup(t)
+	mkProject(t, st, "alpha")
+	if _, err := st.Pool.Exec(context.Background(), `TRUNCATE api_keys`); err != nil {
+		t.Fatal(err)
+	}
+	readKey := "fd_test_mcp_impact_read"
+	writeKey := "fd_test_mcp_impact_write"
+	for _, key := range []store.CreateAPIKeyParams{
+		{Name: "read-agent", KeyHash: auth.HashKey(readKey), Scopes: []string{auth.ScopeRead}},
+		{Name: "write-agent", KeyHash: auth.HashKey(writeKey), Scopes: []string{auth.ScopeWrite}},
+	} {
+		if _, err := st.CreateAPIKey(context.Background(), key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := auth.Middleware(st, auth.ScopeWrite)(mcp.NewHandler(st, svc, "test", nil))
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL, strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-API-Key", readKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("read-only MCP status = %d, want 403", resp.StatusCode)
+	}
+
+	res := callToolWithClient(t, srv.URL, "record_context_impact", map[string]any{
+		"session_id": "mcp-session", "project": "alpha",
+		"effect": "harmful", "mechanism": "stale_or_incorrect",
+		"context_refs":            []string{"alpha summary"},
+		"evidence":                "the summary contained an outdated claim",
+		"estimated_minutes_delta": -5,
+	}, &http.Client{Transport: apiKeyTransport{key: writeKey}})
+	if len(res.Content) != 1 {
+		t.Fatalf("want one result block, got %d", len(res.Content))
+	}
+	var event struct {
+		ID, Actor, Project, Effect, Mechanism, Evidence string
+	}
+	text, ok := res.Content[0].(*mcpsdk.TextContent)
+	if !ok {
+		t.Fatalf("want TextContent, got %T", res.Content[0])
+	}
+	if err := json.Unmarshal([]byte(text.Text), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.ID == "" || event.Actor != "write-agent" || event.Project != "alpha" ||
+		event.Effect != "harmful" || event.Mechanism != "stale_or_incorrect" ||
+		event.Evidence != "the summary contained an outdated claim" {
+		t.Fatalf("event = %+v", event)
+	}
+	if n := countRows(t, st, `SELECT count(*) FROM context_impact_events`); n != 1 {
+		t.Fatalf("impact rows = %d, want 1", n)
 	}
 }

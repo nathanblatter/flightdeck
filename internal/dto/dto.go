@@ -344,6 +344,43 @@ type SearchResults struct {
 	Activity []Activity `json:"activity"`
 }
 
+// ContextImpactEvent is an agent-reported outcome attributed to retrieved
+// Flightdeck context. It is evidence for usefulness analysis, not causal proof.
+type ContextImpactEvent struct {
+	ID                    string    `json:"id"`
+	RecordedAt            time.Time `json:"recorded_at"`
+	Actor                 string    `json:"actor"`
+	SessionID             string    `json:"session_id"`
+	Project               string    `json:"project"`
+	Item                  *string   `json:"item,omitempty"`
+	Effect                string    `json:"effect"`
+	Mechanism             string    `json:"mechanism"`
+	ContextRefs           []string  `json:"context_refs"`
+	Evidence              string    `json:"evidence"`
+	EstimatedMinutesDelta *int32    `json:"estimated_minutes_delta,omitempty"`
+}
+
+func ToContextImpactEvent(event store.ContextImpactEvent) ContextImpactEvent {
+	refs := event.ContextRefs
+	if refs == nil {
+		refs = []string{}
+	}
+	return ContextImpactEvent{
+		ID: event.ID.String(), RecordedAt: event.RecordedAt, Actor: event.Actor,
+		SessionID: event.SessionID, Project: event.Project, Item: event.Item,
+		Effect: event.Effect, Mechanism: event.Mechanism, ContextRefs: refs,
+		Evidence: event.Evidence, EstimatedMinutesDelta: event.EstimatedMinutesDelta,
+	}
+}
+
+func ToContextImpactEvents(events []store.ContextImpactEvent) []ContextImpactEvent {
+	out := make([]ContextImpactEvent, len(events))
+	for i, event := range events {
+		out[i] = ToContextImpactEvent(event)
+	}
+	return out
+}
+
 // ItemsPage is a paginated slice of items. NextOffset is non-nil when more rows
 // remain — pass it back as the cursor to fetch the following page.
 type ItemsPage struct {
@@ -367,9 +404,29 @@ type UsageReport struct {
 	Daily        []DayCalls     `json:"daily,omitempty"`
 	RecentErrors []ToolError    `json:"recent_errors,omitempty"`
 	Search       SearchUsage    `json:"search"`
+	// ContextEffectiveness summarizes explicitly reported outcomes. It does not
+	// infer benefit from tool calls or claim a causal effect.
+	ContextEffectiveness ContextEffectiveness `json:"context_effectiveness"`
 	// Coverage reports how much of the corpus is actually embedded — the ceiling
 	// on what semantic search can ever return.
 	Coverage EmbeddingCoverage `json:"embedding_coverage"`
+}
+
+// ContextEffectiveness aggregates distinct (actor, session_id) pairs with
+// overlapping categories allowed for sessions that report mixed outcomes.
+type ContextEffectiveness struct {
+	MeasurementBasis             string  `json:"measurement_basis"`
+	ReportedSessions             int     `json:"reported_sessions"`
+	HelpfulSessions              int     `json:"helpful_sessions"`
+	NeutralSessions              int     `json:"neutral_sessions"`
+	HarmfulSessions              int     `json:"harmful_sessions"`
+	ContributionRate             float64 `json:"contribution_rate"`
+	PreventedErrorSessions       int     `json:"prevented_error_sessions"`
+	PreventedErrorRate           float64 `json:"prevented_error_rate"`
+	DuplicateWorkAvoidedSessions int     `json:"duplicate_work_avoided_sessions"`
+	DuplicateWorkAvoidanceRate   float64 `json:"duplicate_work_avoidance_rate"`
+	HarmRate                     float64 `json:"harm_rate"`
+	EstimatedMinutesNet          int     `json:"estimated_minutes_net"`
 }
 
 // EmbeddingCoverage is the semantic tier's backfill health. A low embedded

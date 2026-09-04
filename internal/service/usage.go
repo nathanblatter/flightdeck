@@ -95,6 +95,7 @@ func (s *Service) UsageReport(ctx context.Context, days int, knownTools []string
 		search   store.SearchUsageSummaryRow
 		zeroQs   []store.RecentZeroResultSearchesRow
 		coverage store.EmbeddingCoverageRow
+		impact   store.ContextEffectivenessSummaryRow
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) { stats, err = s.St.ToolCallStats(gctx, since); return })
@@ -104,6 +105,7 @@ func (s *Service) UsageReport(ctx context.Context, days int, knownTools []string
 	g.Go(func() (err error) { search, err = s.St.SearchUsageSummary(gctx, since); return })
 	g.Go(func() (err error) { zeroQs, err = s.St.RecentZeroResultSearches(gctx, since); return })
 	g.Go(func() (err error) { coverage, err = s.St.EmbeddingCoverage(gctx); return })
+	g.Go(func() (err error) { impact, err = s.St.ContextEffectivenessSummary(gctx, since); return })
 	if err := g.Wait(); err != nil {
 		return dto.UsageReport{}, err
 	}
@@ -161,5 +163,30 @@ func (s *Service) UsageReport(ctx context.Context, days int, knownTools []string
 		ActivityTotal:    int(coverage.ActivityTotal),
 		ActivityEmbedded: int(coverage.ActivityEmbedded),
 	}
+	reported := int(impact.ReportedSessions)
+	prevented := int(impact.PreventedErrorSessions)
+	duplicates := int(impact.DuplicateWorkAvoidedSessions)
+	harmful := int(impact.HarmfulSessions)
+	rep.ContextEffectiveness = dto.ContextEffectiveness{
+		MeasurementBasis:             "reported_impacts",
+		ReportedSessions:             reported,
+		HelpfulSessions:              int(impact.HelpfulSessions),
+		NeutralSessions:              int(impact.NeutralSessions),
+		HarmfulSessions:              harmful,
+		ContributionRate:             contextImpactRate(int(impact.HelpfulSessions), reported),
+		PreventedErrorSessions:       prevented,
+		PreventedErrorRate:           contextImpactRate(prevented, reported),
+		DuplicateWorkAvoidedSessions: duplicates,
+		DuplicateWorkAvoidanceRate:   contextImpactRate(duplicates, reported),
+		HarmRate:                     contextImpactRate(harmful, reported),
+		EstimatedMinutesNet:          int(impact.EstimatedMinutesNet),
+	}
 	return rep, nil
+}
+
+func contextImpactRate(numerator, denominator int) float64 {
+	if denominator == 0 {
+		return 0
+	}
+	return float64(numerator) / float64(denominator)
 }

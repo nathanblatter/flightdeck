@@ -55,6 +55,22 @@ type Attachment struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+type ContextImpactEvent struct {
+	ID                    uuid.UUID `json:"id"`
+	RecordedAt            time.Time `json:"recorded_at"`
+	Actor                 string    `json:"actor"`
+	SessionID             string    `json:"session_id"`
+	Project               string    `json:"project"`
+	Item                  *string   `json:"item"`
+	Effect                string    `json:"effect"`
+	Mechanism             string    `json:"mechanism"`
+	ContextRefs           []string  `json:"context_refs"`
+	Evidence              string    `json:"evidence"`
+	EstimatedMinutesDelta *int32    `json:"estimated_minutes_delta"`
+	IdempotencyKey        *string   `json:"idempotency_key"`
+	RequestFingerprint    string    `json:"request_fingerprint"`
+}
+
 type Item struct {
 	ID                 uuid.UUID       `json:"id"`
 	ProjectID          uuid.UUID       `json:"project_id"`

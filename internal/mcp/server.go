@@ -280,6 +280,18 @@ type logActivityIn struct {
 	Metadata   map[string]any `json:"metadata,omitempty"`
 }
 
+type recordContextImpactIn struct {
+	SessionID             string   `json:"session_id" jsonschema:"caller-generated identifier shared by impact events from one work session"`
+	Project               string   `json:"project" jsonschema:"existing project slug"`
+	Item                  *string  `json:"item,omitempty" jsonschema:"optional item UUID or short ref belonging to the project"`
+	Effect                string   `json:"effect" jsonschema:"helpful|neutral|harmful"`
+	Mechanism             string   `json:"mechanism" jsonschema:"decision_changed|prevented_error|duplicate_work_avoided|reconstruction_saved|ignored|stale_or_incorrect"`
+	ContextRefs           []string `json:"context_refs,omitempty" jsonschema:"identifiers for the Flightdeck records that influenced this report"`
+	Evidence              string   `json:"evidence" jsonschema:"concise evidence explaining the reported effect"`
+	EstimatedMinutesDelta *int32   `json:"estimated_minutes_delta,omitempty" jsonschema:"optional signed estimate: positive saves time; negative loses time"`
+	IdempotencyKey        *string  `json:"idempotency_key,omitempty" jsonschema:"stable safe-retry key unique to this actor"`
+}
+
 type addRefIn struct {
 	Item  string  `json:"item" jsonschema:"item UUID or short ref (e.g. finforge-42) to ground"`
 	Kind  *string `json:"kind,omitempty" jsonschema:"commit|file|pr|branch|url (default url)"`
@@ -399,6 +411,11 @@ func (h *handlers) register(s *mcpsdk.Server) {
 		Name:        "log_activity",
 		Description: "Record a decision/progress/comment — the freshness flywheel. Capture the why.",
 	}, h.logActivity)
+
+	addTool(h, s, &mcpsdk.Tool{
+		Name:        "record_context_impact",
+		Description: "Record an agent-reported helpful, ignored, or harmful context outcome. This is evidence for usefulness analytics, not causal proof.",
+	}, h.recordContextImpact)
 
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "update_project_summary",
@@ -724,6 +741,23 @@ func (h *handlers) logActivity(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 		return dto.Activity{}, err
 	}
 	return dto.ToActivity(row), nil
+}
+
+func (h *handlers) recordContextImpact(ctx context.Context, _ *mcpsdk.CallToolRequest, in recordContextImpactIn) (dto.ContextImpactEvent, error) {
+	identity, ok := auth.FromContext(ctx)
+	if !ok || identity.Name == "" {
+		return dto.ContextImpactEvent{}, fmt.Errorf("%w: authenticated actor is required", service.ErrInvalidContextImpact)
+	}
+	event, _, err := h.svc.RecordContextImpact(ctx, service.ContextImpactInput{
+		SessionID: in.SessionID, Project: in.Project, Item: in.Item,
+		Effect: in.Effect, Mechanism: in.Mechanism, ContextRefs: in.ContextRefs,
+		Evidence: in.Evidence, EstimatedMinutesDelta: in.EstimatedMinutesDelta,
+		IdempotencyKey: in.IdempotencyKey,
+	}, identity.Name)
+	if err != nil {
+		return dto.ContextImpactEvent{}, err
+	}
+	return dto.ToContextImpactEvent(event), nil
 }
 
 func (h *handlers) updateProjectSummary(ctx context.Context, _ *mcpsdk.CallToolRequest, in updateSummaryIn) (dto.Project, error) {
