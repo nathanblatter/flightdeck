@@ -46,6 +46,11 @@ docker compose exec flightdeck flightdeck keys revoke <id>
 - `GET/POST /projects`, `GET/PATCH /projects/{slug}` — projects can nest into a
   tree via `parent` (a project slug; PATCH `""` re-roots, cycles are rejected
   with 400); `GET /context/{slug}` lists direct `children`
+- `DELETE /projects/{slug}?confirm={slug}` — permanently deletes a project and
+  all its items and activity. Two-step by design: PATCH `status=archived` first
+  (reversible — hides the project from orient reads, listings and pickers), then
+  DELETE to purge. Refused with 409 if the project isn't archived or still has
+  child projects; archived projects are reachable via `GET /projects?status=archived`
 - `GET/POST /items`, `GET/PATCH/DELETE /items/{id}` (filters: project, status, type, assignee, tag, q, updated_since)
 - `GET/POST /activity` (filters: project, item_id, kind, since)
 - `GET/POST /context-impact` — audit and record agent-reported helpful, ignored, or harmful context outcomes (`GET` filters: days, project, limit)
@@ -80,7 +85,12 @@ Tools — orient: `list_projects`, `get_project_context`, `get_global_context`,
 `search`, `list_items`, `get_item`, `next_action`, `digest`, `stale`. Log:
 `create_project`, `create_item`, `update_item`, `log_activity`,
 `update_project_summary`, `set_project_instructions`, `link_items`,
-`unlink_items`, `add_item_ref`, `list_item_refs`, `record_context_impact`.
+`unlink_items`, `add_item_ref`, `list_item_refs`, `record_context_impact`,
+`archive_project`.
+
+Purging an archived project is deliberately *not* an MCP tool — archiving is
+reversible so agents may do it, but destroying history is a human decision and
+lives only on `DELETE /projects/{slug}` and the web UI's danger zone.
 
 `get_project_context` surfaces `rejected_approaches` (dead-end/out-of-scope
 notes) and freshness (`activities_since_summary`) so an agent can judge whether

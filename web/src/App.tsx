@@ -152,8 +152,24 @@ function Dashboard({
   // Live updates over SSE — pushes replace polling for freshness.
   useLiveUpdates();
 
-  const projectsQ = useQuery({ queryKey: ["projects"], queryFn: api.projects });
+  const projectsQ = useQuery({ queryKey: ["projects"], queryFn: () => api.projects() });
   const projects: Project[] = projectsQ.data ?? [];
+  // Archived projects are hidden from every other surface, so this listing is
+  // the only route back to one — to restore it, or to purge it for good.
+  const archivedQ = useQuery({
+    queryKey: ["projects", "archived"],
+    queryFn: () => api.projects("archived"),
+  });
+  const archived: Project[] = archivedQ.data ?? [];
+
+  // A purged project leaves the filter pointing at a slug that no longer
+  // exists, which silently empties the board. Drop the filter once both
+  // listings have loaded and neither knows the slug.
+  useEffect(() => {
+    if (!projectFilter || !projectsQ.isSuccess || !archivedQ.isSuccess) return;
+    const known = [...projects, ...archived].some((p) => p.slug === projectFilter);
+    if (!known) setProjectFilter("");
+  }, [projectFilter, projects, archived, projectsQ.isSuccess, archivedQ.isSuccess]);
   const projectById = useMemo(() => {
     const m = new Map<string, Project>();
     for (const p of projects) m.set(p.id, p);
@@ -275,7 +291,21 @@ function Dashboard({
               {p.name}
             </option>
           ))}
+          {archived.length > 0 && (
+            <optgroup label="Archived">
+              {archived.map((p) => (
+                <option key={p.slug} value={p.slug}>
+                  {p.name}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
+        {archived.some((p) => p.slug === projectFilter) && (
+          <button className="btn" onClick={() => setDrawerSlug(projectFilter)}>
+            Archived — restore or delete
+          </button>
+        )}
         <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
           <option value="">All types</option>
           <option value="task">tasks</option>

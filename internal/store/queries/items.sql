@@ -5,16 +5,23 @@ SELECT * FROM items WHERE id = $1 AND deleted_at IS NULL;
 SELECT * FROM items WHERE lower(ref) = lower($1) AND deleted_at IS NULL;
 
 -- name: ListItems :many
-SELECT * FROM items
-WHERE deleted_at IS NULL
-  AND (sqlc.narg('project_id')::uuid IS NULL OR project_id = sqlc.narg('project_id'))
-  AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status'))
-  AND (sqlc.narg('type')::text IS NULL OR type = sqlc.narg('type'))
-  AND (sqlc.narg('assignee')::text IS NULL OR assignee = sqlc.narg('assignee'))
-  AND (sqlc.narg('tag')::text IS NULL OR sqlc.narg('tag')::text = ANY(tags))
-  AND (sqlc.narg('updated_since')::timestamptz IS NULL OR updated_at >= sqlc.narg('updated_since'))
-  AND (sqlc.narg('q')::text IS NULL OR search @@ plainto_tsquery('english', sqlc.narg('q')))
-ORDER BY position ASC, created_at DESC
+-- Items of archived projects are hidden unless that project is asked for by id.
+-- Archiving is meant to declutter; leaving its items on the board (with no
+-- resolvable project chip, since the project is gone from the listing) would
+-- defeat the point.
+SELECT i.* FROM items i
+WHERE i.deleted_at IS NULL
+  AND (sqlc.narg('project_id')::uuid IS NOT NULL OR NOT EXISTS (
+        SELECT 1 FROM projects p
+        WHERE p.id = i.project_id AND p.status = 'archived'))
+  AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
+  AND (sqlc.narg('status')::text IS NULL OR i.status = sqlc.narg('status'))
+  AND (sqlc.narg('type')::text IS NULL OR i.type = sqlc.narg('type'))
+  AND (sqlc.narg('assignee')::text IS NULL OR i.assignee = sqlc.narg('assignee'))
+  AND (sqlc.narg('tag')::text IS NULL OR sqlc.narg('tag')::text = ANY(i.tags))
+  AND (sqlc.narg('updated_since')::timestamptz IS NULL OR i.updated_at >= sqlc.narg('updated_since'))
+  AND (sqlc.narg('q')::text IS NULL OR i.search @@ plainto_tsquery('english', sqlc.narg('q')))
+ORDER BY i.position ASC, i.created_at DESC
 LIMIT COALESCE(sqlc.narg('lim')::int, 500)
 OFFSET COALESCE(sqlc.narg('off')::int, 0);
 

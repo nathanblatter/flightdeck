@@ -5,8 +5,12 @@ SELECT * FROM projects WHERE slug = $1;
 SELECT * FROM projects WHERE id = $1;
 
 -- name: ListProjects :many
+-- Archived projects are excluded unless asked for by name (status='archived').
+-- That exclusion is what makes archiving mean something: without it 'archived'
+-- is just a label and the project still clutters every orient read and picker.
 SELECT * FROM projects
 WHERE (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status'))
+  AND (sqlc.narg('status')::text IS NOT NULL OR status <> 'archived')
 ORDER BY
     CASE status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 WHEN 'done' THEN 2 ELSE 3 END,
     updated_at DESC;
@@ -83,3 +87,25 @@ SELECT status, count(*) AS n
 FROM items
 WHERE project_id = $1 AND deleted_at IS NULL
 GROUP BY status;
+
+-- name: DeleteProject :one
+-- Hard-delete a project. items/activity/webhooks cascade; child projects are
+-- re-rooted by the parent_slug ON DELETE SET NULL (the service refuses the
+-- delete when children exist, so that path is a backstop, not the contract).
+DELETE FROM projects WHERE slug = $1 RETURNING *;
+
+-- name: ListAttachmentKeysForProject :many
+-- Object keys owned by a project's items, collected before a purge so the
+-- blobs can be removed — the attachment rows cascade away with the items and
+-- would otherwise leave the objects orphaned in S3/MinIO forever.
+SELECT a.object_key FROM attachments a
+JOIN items i ON i.id = a.item_id
+WHERE i.project_id = $1;
+
+-- name: CountProjectContents :one
+-- Pre-purge tally so the API can report (and the UI can confirm) exactly how
+-- much is about to be destroyed. Counts soft-deleted items too: a hard delete
+-- takes them as well.
+SELECT
+    (SELECT count(*) FROM items    i WHERE i.project_id = $1) AS items,
+    (SELECT count(*) FROM activity a WHERE a.project_id = $1) AS activity;

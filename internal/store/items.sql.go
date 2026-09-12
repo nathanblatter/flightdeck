@@ -174,16 +174,19 @@ func (q *Queries) GetItemByRef(ctx context.Context, lower string) (Item, error) 
 }
 
 const listItems = `-- name: ListItems :many
-SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model FROM items
-WHERE deleted_at IS NULL
-  AND ($1::uuid IS NULL OR project_id = $1)
-  AND ($2::text IS NULL OR status = $2)
-  AND ($3::text IS NULL OR type = $3)
-  AND ($4::text IS NULL OR assignee = $4)
-  AND ($5::text IS NULL OR $5::text = ANY(tags))
-  AND ($6::timestamptz IS NULL OR updated_at >= $6)
-  AND ($7::text IS NULL OR search @@ plainto_tsquery('english', $7))
-ORDER BY position ASC, created_at DESC
+SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model FROM items i
+WHERE i.deleted_at IS NULL
+  AND ($1::uuid IS NOT NULL OR NOT EXISTS (
+        SELECT 1 FROM projects p
+        WHERE p.id = i.project_id AND p.status = 'archived'))
+  AND ($1::uuid IS NULL OR i.project_id = $1)
+  AND ($2::text IS NULL OR i.status = $2)
+  AND ($3::text IS NULL OR i.type = $3)
+  AND ($4::text IS NULL OR i.assignee = $4)
+  AND ($5::text IS NULL OR $5::text = ANY(i.tags))
+  AND ($6::timestamptz IS NULL OR i.updated_at >= $6)
+  AND ($7::text IS NULL OR i.search @@ plainto_tsquery('english', $7))
+ORDER BY i.position ASC, i.created_at DESC
 LIMIT COALESCE($9::int, 500)
 OFFSET COALESCE($8::int, 0)
 `
@@ -200,6 +203,10 @@ type ListItemsParams struct {
 	Lim          *int32      `json:"lim"`
 }
 
+// Items of archived projects are hidden unless that project is asked for by id.
+// Archiving is meant to declutter; leaving its items on the board (with no
+// resolvable project chip, since the project is gone from the listing) would
+// defeat the point.
 func (q *Queries) ListItems(ctx context.Context, arg ListItemsParams) ([]Item, error) {
 	rows, err := q.db.Query(ctx, listItems,
 		arg.ProjectID,

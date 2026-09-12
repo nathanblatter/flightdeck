@@ -22,6 +22,10 @@ type Querier interface {
 	// Single-project status counts — avoids the all-projects full scan when serving
 	// a single-project orient.
 	CountItemsByStatusForProject(ctx context.Context, projectID uuid.UUID) ([]CountItemsByStatusForProjectRow, error)
+	// Pre-purge tally so the API can report (and the UI can confirm) exactly how
+	// much is about to be destroyed. Counts soft-deleted items too: a hard delete
+	// takes them as well.
+	CountProjectContents(ctx context.Context, projectID uuid.UUID) (CountProjectContentsRow, error)
 	CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (ApiKey, error)
 	CreateActivity(ctx context.Context, arg CreateActivityParams) (Activity, error)
 	CreateAttachment(ctx context.Context, arg CreateAttachmentParams) (Attachment, error)
@@ -35,6 +39,10 @@ type Querier interface {
 	DeleteAttachment(ctx context.Context, id uuid.UUID) (Attachment, error)
 	DeleteItemLink(ctx context.Context, id uuid.UUID) error
 	DeleteItemRef(ctx context.Context, id uuid.UUID) error
+	// Hard-delete a project. items/activity/webhooks cascade; child projects are
+	// re-rooted by the parent_slug ON DELETE SET NULL (the service refuses the
+	// delete when children exist, so that path is a backstop, not the contract).
+	DeleteProject(ctx context.Context, slug string) (Project, error)
 	DeleteWebhook(ctx context.Context, id uuid.UUID) error
 	// Semantic-tier backfill health: how many live items are embedded vs poison
 	// ('failed'), and the same for high-signal activity (the kinds the embedder
@@ -71,6 +79,10 @@ type Querier interface {
 	// Any activity with a non-empty body that has no embedding yet. Rows with a 'failed' marker are poison
 	// and skipped. Activity is immutable, so there is no re-embed-on-edit path.
 	ListActivityNeedingEmbedding(ctx context.Context, lim int32) ([]ListActivityNeedingEmbeddingRow, error)
+	// Object keys owned by a project's items, collected before a purge so the
+	// blobs can be removed — the attachment rows cascade away with the items and
+	// would otherwise leave the objects orphaned in S3/MinIO forever.
+	ListAttachmentKeysForProject(ctx context.Context, projectID uuid.UUID) ([]string, error)
 	ListAttachmentsForItem(ctx context.Context, itemID uuid.UUID) ([]Attachment, error)
 	// For a project, the active "blocks" edges: each row means blocked_id is blocked
 	// by blocker_id (whose status is still open). Used to flag non-ready open items.
@@ -80,6 +92,10 @@ type Querier interface {
 	// Dead-lettered / erroring events for operator visibility (last_error set).
 	ListFailedWebhookEvents(ctx context.Context, limit int32) ([]WebhookEvent, error)
 	ListItemRefs(ctx context.Context, itemID uuid.UUID) ([]ItemRef, error)
+	// Items of archived projects are hidden unless that project is asked for by id.
+	// Archiving is meant to declutter; leaving its items on the board (with no
+	// resolvable project chip, since the project is gone from the listing) would
+	// defeat the point.
 	ListItems(ctx context.Context, arg ListItemsParams) ([]Item, error)
 	// Live items whose embedding is missing (never embedded, or invalidated by a
 	// content edit). The background embedder drains this in batches. Rows marked
@@ -91,6 +107,9 @@ type Querier interface {
 	// open blocker. Used to annotate /items list responses with blocked flags.
 	ListOpenBlockingEdges(ctx context.Context) ([]ListOpenBlockingEdgesRow, error)
 	ListOpenItemsByProject(ctx context.Context, arg ListOpenItemsByProjectParams) ([]Item, error)
+	// Archived projects are excluded unless asked for by name (status='archived').
+	// That exclusion is what makes archiving mean something: without it 'archived'
+	// is just a label and the project still clutters every orient read and picker.
 	ListProjects(ctx context.Context, status *string) ([]Project, error)
 	// Object keys owned by items about to be hard-deleted, so the maintenance
 	// sweep can remove the blobs before the rows cascade away.

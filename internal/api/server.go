@@ -52,6 +52,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /projects", write(s.createProject))
 	mux.Handle("GET /projects/{slug}", read(s.getProject))
 	mux.Handle("PATCH /projects/{slug}", write(s.patchProject))
+	mux.Handle("DELETE /projects/{slug}", write(s.deleteProject))
 
 	// items
 	mux.Handle("GET /items", read(s.listItems))
