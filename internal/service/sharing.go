@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,12 +34,63 @@ const (
 var ErrSharingNotConfigured = errors.New("sharing is not configured: set the mailbox URL and client certificate first")
 
 // MailboxConfig is this instance's credentials for its mailbox host.
+//
+// The cert fields accept both their own names and the ones a bundle from
+// `flightdeck-mailbox issue` uses, so setting up a new instance is a matter of
+// posting that file with a url added rather than renaming three fields by hand.
 type MailboxConfig struct {
 	URL        string `json:"url"`
 	AdminToken string `json:"admin_token"`
 	ClientCert string `json:"client_cert"`
 	ClientKey  string `json:"client_key"`
 	CAPEM      string `json:"ca_pem"`
+
+	// Aliases as issued in a bundle file. Normalize() folds them in.
+	BundleCert string `json:"cert_pem,omitempty"`
+	BundleKey  string `json:"key_pem,omitempty"`
+	// Accepted and ignored so a bundle can be posted verbatim: the strict JSON
+	// decoder rejects unknown fields, and these two ride along in every bundle.
+	BundleName        string `json:"name,omitempty"`
+	BundleFingerprint string `json:"ca_fingerprint,omitempty"`
+}
+
+// Normalize folds bundle-shaped fields into the canonical ones.
+func (c *MailboxConfig) Normalize() {
+	if c.ClientCert == "" {
+		c.ClientCert = c.BundleCert
+	}
+	if c.ClientKey == "" {
+		c.ClientKey = c.BundleKey
+	}
+	c.BundleCert, c.BundleKey = "", ""
+	c.BundleName, c.BundleFingerprint = "", ""
+	c.URL = strings.TrimRight(strings.TrimSpace(c.URL), "/")
+}
+
+// Validate reports why a configuration is unusable, so a mistyped setup fails
+// with something actionable instead of a TLS error on the next sync tick.
+func (c MailboxConfig) Validate() error {
+	switch {
+	case c.URL == "":
+		return errors.New("mailbox url is required (e.g. https://198.51.100.10)")
+	case !strings.HasPrefix(c.URL, "https://"):
+		return errors.New("mailbox url must be https")
+	case c.ClientCert == "":
+		return errors.New("client certificate is missing (cert_pem from the bundle)")
+	case c.ClientKey == "":
+		return errors.New("client key is missing (key_pem from the bundle)")
+	case c.CAPEM == "":
+		return errors.New("CA certificate is missing (ca_pem from the bundle)")
+	}
+	// Fail here rather than at the next sync: a malformed pair is a typo now,
+	// not a mystery later.
+	if _, err := tls.X509KeyPair([]byte(c.ClientCert), []byte(c.ClientKey)); err != nil {
+		return fmt.Errorf("certificate and key do not form a valid pair: %w", err)
+	}
+	if !x509.NewCertPool().AppendCertsFromPEM([]byte(c.CAPEM)) {
+		return errors.New("ca_pem is not a valid certificate")
+	}
+	return nil
 }
 
 func (c MailboxConfig) configured() bool {
