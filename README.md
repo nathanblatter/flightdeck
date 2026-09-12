@@ -92,6 +92,42 @@ Purging an archived project is deliberately *not* an MCP tool — archiving is
 reversible so agents may do it, but destroying history is a human decision and
 lives only on `DELETE /projects/{slug}` and the web UI's danger zone.
 
+## Sharing a project across instances
+
+Two flightdeck instances can keep one project in step through a mailbox server
+(`cmd/flightdeck-mailbox`) that neither can reach directly. Both sides may
+write; payloads are encrypted end to end and the mailbox host cannot read them.
+
+**Set up the mailbox host once.** It needs to be reachable from both instances.
+`MAILBOX_ADMIN_TOKEN` gates mailbox creation; `MAILBOX_SANS` lists the
+addresses it will be reached on. See `deploy/` for the systemd unit.
+
+**Give each instance a bundle.** Access is mutual TLS, so an instance without a
+client certificate cannot complete a handshake at all:
+
+```sh
+ssh mailbox-host 'flightdeck-mailbox issue work-laptop' > work-laptop.json
+```
+
+**Point that instance at the host.** The endpoint accepts the bundle as-is with
+a `url` added, so there is nothing to rename:
+
+```sh
+jq '. + {url: "https://<mailbox-host>"}' work-laptop.json \
+  | curl -X PUT http://localhost:4300/api/shares/config \
+      -H "X-API-Key: $FLIGHTDECK_KEY" -H 'Content-Type: application/json' -d @-
+```
+
+Add `admin_token` only where you want to *create* invites. An instance with a
+bundle but no admin token can join shares but not start them — which is usually
+what you want for a secondary machine.
+
+**Share a project.** From the project drawer, name the other instance and
+create an invite; paste it into that instance's "Join shared". The invite
+carries the mailbox address, a client certificate, both mailbox tokens, and the
+project's encryption key, so the joining instance needs no prior setup — and
+the code should travel somewhere you trust and is shown only once.
+
 `get_project_context` surfaces `rejected_approaches` (dead-end/out-of-scope
 notes) and freshness (`activities_since_summary`) so an agent can judge whether
 to trust the summary; items carry `acceptance_criteria` + `acceptance_unmet` (the

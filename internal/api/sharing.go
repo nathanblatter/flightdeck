@@ -141,6 +141,13 @@ func (s *Server) putMailboxConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Accepts a bundle file with a url added, so setting up an instance does
+	// not mean renaming fields by hand.
+	cfg.Normalize()
+	if err := cfg.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := s.Svc.SetMailboxConfig(r.Context(), cfg); err != nil {
 		writeDBError(w, err)
 		return
