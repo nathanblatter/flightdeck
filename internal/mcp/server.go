@@ -331,6 +331,10 @@ type setInstructionsIn struct {
 	Instructions string `json:"instructions" jsonschema:"project-specific conventions agents should follow (e.g. run tests before marking done)"`
 }
 
+type archiveProjectIn struct {
+	Slug string `json:"slug" jsonschema:"project slug to archive"`
+}
+
 type linkItemsIn struct {
 	From string `json:"from" jsonschema:"source item UUID or short ref (e.g. finforge-42)"`
 	To   string `json:"to" jsonschema:"target item UUID or short ref (e.g. finforge-43)"`
@@ -443,6 +447,17 @@ func (h *handlers) register(s *mcpsdk.Server) {
 		Name:        "set_project_instructions",
 		Description: "Set a project's agent-instructions (conventions an agent reads on orient).",
 	}, h.setProjectInstructions)
+
+	addTool(h, s, &mcpsdk.Tool{
+		Name:        "archive_project",
+		Description: "Archive a project: hides it from orient reads and the default UI while keeping all items and history. Reversible — set status back to active to restore. Use this for projects that are finished or abandoned rather than leaving them cluttering the active set.",
+	}, h.archiveProject)
+
+	// Purging an archived project (the irreversible hard delete of its items and
+	// activity) is deliberately NOT an MCP tool — same reasoning as next_action
+	// below, but inverted: not token weight, blast radius. Destroying history is
+	// a human decision, so it lives only on DELETE /projects/{slug}?confirm=slug
+	// and behind the web UI's type-the-slug confirmation.
 
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "link_items",
@@ -832,6 +847,13 @@ func (h *handlers) setProjectInstructions(ctx context.Context, _ *mcpsdk.CallToo
 		return dto.Project{}, err
 	}
 	return dto.ToProject(p), nil
+}
+
+func (h *handlers) archiveProject(ctx context.Context, _ *mcpsdk.CallToolRequest, in archiveProjectIn) (okOut, error) {
+	if err := h.svc.ArchiveProject(ctx, in.Slug); err != nil {
+		return okOut{}, err
+	}
+	return okOut{OK: true}, nil
 }
 
 func (h *handlers) linkItems(ctx context.Context, _ *mcpsdk.CallToolRequest, in linkItemsIn) (linkOut, error) {

@@ -78,6 +78,27 @@ func (q *Queries) CountItemsByStatusForProject(ctx context.Context, projectID uu
 	return items, nil
 }
 
+const countProjectContents = `-- name: CountProjectContents :one
+SELECT
+    (SELECT count(*) FROM items    i WHERE i.project_id = $1) AS items,
+    (SELECT count(*) FROM activity a WHERE a.project_id = $1) AS activity
+`
+
+type CountProjectContentsRow struct {
+	Items    int64 `json:"items"`
+	Activity int64 `json:"activity"`
+}
+
+// Pre-purge tally so the API can report (and the UI can confirm) exactly how
+// much is about to be destroyed. Counts soft-deleted items too: a hard delete
+// takes them as well.
+func (q *Queries) CountProjectContents(ctx context.Context, projectID uuid.UUID) (CountProjectContentsRow, error) {
+	row := q.db.QueryRow(ctx, countProjectContents, projectID)
+	var i CountProjectContentsRow
+	err := row.Scan(&i.Items, &i.Activity)
+	return i, err
+}
+
 const createProject = `-- name: CreateProject :one
 INSERT INTO projects (slug, name, status, summary, instructions, repo_url, site_url, aliases, parent_slug)
 VALUES (
@@ -118,6 +139,34 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		arg.Aliases,
 		arg.ParentSlug,
 	)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.Slug,
+		&i.Name,
+		&i.Status,
+		&i.Summary,
+		&i.RepoUrl,
+		&i.SiteUrl,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Instructions,
+		&i.ItemSeq,
+		&i.Aliases,
+		&i.ParentSlug,
+	)
+	return i, err
+}
+
+const deleteProject = `-- name: DeleteProject :one
+DELETE FROM projects WHERE slug = $1 RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug
+`
+
+// Hard-delete a project. items/activity/webhooks cascade; child projects are
+// re-rooted by the parent_slug ON DELETE SET NULL (the service refuses the
+// delete when children exist, so that path is a backstop, not the contract).
+func (q *Queries) DeleteProject(ctx context.Context, slug string) (Project, error) {
+	row := q.db.QueryRow(ctx, deleteProject, slug)
 	var i Project
 	err := row.Scan(
 		&i.ID,
@@ -187,6 +236,35 @@ func (q *Queries) GetProjectBySlug(ctx context.Context, slug string) (Project, e
 	return i, err
 }
 
+const listAttachmentKeysForProject = `-- name: ListAttachmentKeysForProject :many
+SELECT a.object_key FROM attachments a
+JOIN items i ON i.id = a.item_id
+WHERE i.project_id = $1
+`
+
+// Object keys owned by a project's items, collected before a purge so the
+// blobs can be removed — the attachment rows cascade away with the items and
+// would otherwise leave the objects orphaned in S3/MinIO forever.
+func (q *Queries) ListAttachmentKeysForProject(ctx context.Context, projectID uuid.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, listAttachmentKeysForProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var object_key string
+		if err := rows.Scan(&object_key); err != nil {
+			return nil, err
+		}
+		items = append(items, object_key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listChildProjects = `-- name: ListChildProjects :many
 SELECT slug, name, status, summary FROM projects
 WHERE parent_slug = $1
@@ -228,11 +306,15 @@ func (q *Queries) ListChildProjects(ctx context.Context, parentSlug *string) ([]
 const listProjects = `-- name: ListProjects :many
 SELECT id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug FROM projects
 WHERE ($1::text IS NULL OR status = $1)
+  AND ($1::text IS NOT NULL OR status <> 'archived')
 ORDER BY
     CASE status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 WHEN 'done' THEN 2 ELSE 3 END,
     updated_at DESC
 `
 
+// Archived projects are excluded unless asked for by name (status='archived').
+// That exclusion is what makes archiving mean something: without it 'archived'
+// is just a label and the project still clutters every orient read and picker.
 func (q *Queries) ListProjects(ctx context.Context, status *string) ([]Project, error) {
 	rows, err := q.db.Query(ctx, listProjects, status)
 	if err != nil {

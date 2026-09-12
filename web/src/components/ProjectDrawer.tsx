@@ -38,6 +38,26 @@ export function ProjectDrawer({
     },
   });
 
+  // Deletion is two deliberate steps. Archiving is reversible and hides the
+  // project from orient reads and pickers; purging is the hard delete and is
+  // only offered once archived, behind a type-the-slug confirmation.
+  const [confirmSlug, setConfirmSlug] = useState("");
+  const archive = useMutation({
+    mutationFn: (status: "archived" | "active") => api.patchProject(slug, { status }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["context"] });
+      qc.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+  const purge = useMutation({
+    mutationFn: () => api.deleteProject(slug),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["context"] });
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      onClose();
+    },
+  });
+
   // "" clears the parent (back to root); the server rejects cycles with a 400.
   const setParent = useMutation({
     mutationFn: (parent: string) => api.patchProject(slug, { parent }),
@@ -214,6 +234,64 @@ export function ProjectDrawer({
                   <li className="muted">No activity logged.</li>
                 )}
               </ul>
+            </section>
+
+            <section className="danger-zone">
+              <h3 className="section-title">Danger zone</h3>
+              {data.project.status !== "archived" ? (
+                <>
+                  <p className="muted sm">
+                    Archiving hides this project from orient reads and pickers.
+                    Nothing is deleted and you can restore it at any time.
+                  </p>
+                  <div className="drawer-actions">
+                    <button
+                      className="btn"
+                      disabled={archive.isPending}
+                      onClick={() => archive.mutate("archived")}
+                    >
+                      {archive.isPending ? "Archiving…" : "Archive project"}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="muted sm">
+                    This project is archived. Restore it, or permanently delete
+                    it and its {data.counts ? Object.values(data.counts).reduce((a, b) => a + b, 0) : 0} item(s)
+                    plus all activity history. Deleting cannot be undone.
+                  </p>
+                  <div className="drawer-actions">
+                    <button
+                      className="btn"
+                      disabled={archive.isPending}
+                      onClick={() => archive.mutate("active")}
+                    >
+                      {archive.isPending ? "Restoring…" : "Restore to active"}
+                    </button>
+                  </div>
+                  <label className="sm">
+                    Type <code>{slug}</code> to confirm permanent deletion
+                    <input
+                      value={confirmSlug}
+                      onChange={(e) => setConfirmSlug(e.target.value)}
+                      placeholder={slug}
+                    />
+                  </label>
+                  <div className="drawer-actions">
+                    <button
+                      className="btn danger"
+                      disabled={confirmSlug !== slug || purge.isPending}
+                      onClick={() => purge.mutate()}
+                    >
+                      {purge.isPending ? "Deleting…" : "Delete permanently"}
+                    </button>
+                  </div>
+                  {purge.isError && (
+                    <p className="sm error">{(purge.error as Error).message}</p>
+                  )}
+                </>
+              )}
             </section>
           </>
         )}

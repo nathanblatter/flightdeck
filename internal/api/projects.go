@@ -128,6 +128,28 @@ func (s *Server) patchProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.ToProject(p))
 }
 
+// deleteProject purges an archived project and everything under it. This is
+// irreversible, so it is gated twice: the project must already be archived
+// (PATCH status=archived), and ?confirm= must repeat the slug — a bare DELETE
+// on the right URL is not enough to destroy a project's history.
+func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
+	slug := r.PathValue("slug")
+	if r.URL.Query().Get("confirm") != slug {
+		writeError(w, http.StatusBadRequest, "confirm query parameter must equal the project slug")
+		return
+	}
+	counts, err := s.Svc.PurgeProject(r.Context(), slug)
+	if err != nil {
+		if errors.Is(err, service.ErrProjectNotEmpty) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeDBError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, counts)
+}
+
 // checkParent validates a requested parent change and normalizes it to the
 // store's nullable form (nil = root). A nil req means "leave unchanged".
 func checkParent(s *Server, r *http.Request, slug string, req *string) (*string, error) {

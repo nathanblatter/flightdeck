@@ -14,6 +14,13 @@ export function clearApiKey() {
 }
 
 export type ProjectStatus = "active" | "paused" | "done" | "archived";
+
+/** What a project purge destroyed — reported back so the UI can confirm it. */
+export interface ProjectPurgeCounts {
+  items: number;
+  activity: number;
+  attachments: number;
+}
 export type ItemStatus =
   | "backlog"
   | "todo"
@@ -268,7 +275,10 @@ export async function completeSetup(
 }
 
 export const api = {
-  projects: () => req<Project[]>("GET", "/projects"),
+  // Archived projects are excluded from the default listing; pass a status to
+  // reach them (the only way back to an archived project's drawer).
+  projects: (status?: ProjectStatus) =>
+    req<Project[]>("GET", `/projects${qs({ status })}`),
   items: (f: ItemFilters = {}) =>
     req<Item[]>("GET", `/items${qs({ ...f })}`),
   // Cascading recall over items + activity: full-text → semantic (pgvector
@@ -324,4 +334,9 @@ export const api = {
     req<Project>("PATCH", `/projects/${slug}`, body),
   createProject: (body: { slug: string; name: string; summary?: string; parent?: string }) =>
     req<Project>("POST", "/projects", body),
+  // Irreversible: hard-deletes the project's items and activity. The server
+  // refuses unless the project is already archived and has no children, and
+  // requires `confirm` to repeat the slug.
+  deleteProject: (slug: string) =>
+    req<ProjectPurgeCounts>("DELETE", `/projects/${slug}${qs({ confirm: slug })}`),
 };

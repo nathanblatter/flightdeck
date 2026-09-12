@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -272,6 +273,12 @@ func (s *Service) buildProjectContext(ctx context.Context, slug string, v Verbos
 	})
 	g.Go(func() (err error) {
 		children, err = s.St.ListChildProjects(gctx, &p.Slug)
+		// The query stays unfiltered (PurgeProject needs to see archived
+		// children too, or the FK would silently re-root them); orient just
+		// doesn't want them in the brief.
+		children = slices.DeleteFunc(children, func(c store.ListChildProjectsRow) bool {
+			return c.Status == "archived"
+		})
 		return
 	})
 	if err := g.Wait(); err != nil {
