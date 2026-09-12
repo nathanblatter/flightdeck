@@ -23,6 +23,7 @@ import (
 	"flightdeck/internal/metrics"
 	"flightdeck/internal/service"
 	"flightdeck/internal/store"
+	syncengine "flightdeck/internal/sync"
 	"flightdeck/internal/update"
 	"flightdeck/web"
 )
@@ -188,6 +189,21 @@ func runServe() {
 	go svc.RunMaintenance(ctx)
 	go svc.RunEmbedder(ctx)
 	go upd.Run(ctx)
+
+	// Cross-instance project sharing. Self-disabling: with no shares
+	// configured the loop costs one empty query every interval.
+	if instanceID, err := svc.InstanceID(ctx); err != nil {
+		log.Printf("sync: no instance identity, sharing disabled: %v", err)
+	} else {
+		engine := &syncengine.Engine{
+			St:         st,
+			InstanceID: instanceID,
+			// Applied remote changes must invalidate the orient caches and
+			// reach open browsers, exactly as a local write would.
+			OnChange: func(projectID uuid.UUID) { svc.InvalidateProject(projectID) },
+		}
+		go engine.Run(ctx)
+	}
 
 	go func() {
 		log.Printf("flightdeck %s listening on %s", Version, addr)

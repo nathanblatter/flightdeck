@@ -1,0 +1,62 @@
+[Unit]
+Description=Flightdeck mailbox — rendezvous server for cross-instance project sharing
+Documentation=https://github.com/nathanblatter/flightdeck
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/flightdeck-mailbox serve
+Restart=always
+RestartSec=2
+
+# Runs as its own unprivileged user. The only privilege it needs is binding
+# 443, granted as a single capability rather than by running as root.
+User=flightdeck-mailbox
+Group=flightdeck-mailbox
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# The admin token lives here, not in the unit file and not in the repo.
+EnvironmentFile=/etc/flightdeck-mailbox.env
+StateDirectory=flightdeck-mailbox
+StateDirectoryMode=0700
+
+# Sandbox. This process parses untrusted bytes from the open internet, so it
+# gets the narrowest view of the system that still lets it do its job: an
+# unwritable filesystem apart from its own state directory, no other users'
+# homes, no kernel knobs, no new privileges, and no network families beyond
+# TCP/IP.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/flightdeck-mailbox
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# Go does not JIT, so refusing writable-executable memory costs nothing and
+# removes a common exploit primitive.
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+# Bounded so a runaway or a flood degrades this service instead of the host.
+MemoryMax=512M
+TasksMax=256
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target

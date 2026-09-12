@@ -1,0 +1,69 @@
+# Deploys the mailbox server. Tag-driven like the flightdeck release workflow,
+# so shipping is always an explicit act and the gates run first.
+#
+# The deploy key on the far end is pinned to a single command
+# (command="/usr/local/sbin/mailbox-deploy",restrict), so even if this
+# workflow or the secret were compromised, the key cannot open a shell,
+# forward a port, or run anything but the deploy hook.
+name: Deploy mailbox
+
+on:
+  push:
+    tags:
+      - "mailbox-v*"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-mailbox
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./internal/mailbox/... -race -count=1
+      - name: gofmt
+        run: test -z "$(gofmt -l cmd internal)"
+
+  deploy:
+    name: Build and deploy
+    needs: gate
+    runs-on: ubuntu-latest
+    environment: mailbox
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build static linux/amd64 binary
+        run: |
+          VERSION="${GITHUB_REF_NAME#mailbox-}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -trimpath -ldflags "-s -w -X main.Version=${VERSION}" \
+            -o flightdeck-mailbox ./cmd/flightdeck-mailbox
+
+      - name: Deploy over the command-restricted key
+        env:
+          DEPLOY_KEY: ${{ secrets.MAILBOX_DEPLOY_KEY }}
+          HOST: ${{ secrets.MAILBOX_HOST }}
+          HOST_FINGERPRINT: ${{ secrets.MAILBOX_HOST_FINGERPRINT }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Pin the host key rather than accepting whatever answers, so a
+          # hijacked IP can't collect a freshly built binary.
+          printf '%s\n' "$HOST_FINGERPRINT" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile=~/.ssh/known_hosts \
+              "root@${HOST}" < flightdeck-mailbox

@@ -54,6 +54,14 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("PATCH /projects/{slug}", write(s.patchProject))
 	mux.Handle("DELETE /projects/{slug}", write(s.deleteProject))
 
+	// sharing
+	mux.Handle("GET /shares", read(s.listShares))
+	mux.Handle("POST /shares", write(s.shareProject))
+	mux.Handle("POST /shares/accept", write(s.acceptInvite))
+	mux.Handle("DELETE /shares/{id}", write(s.deleteShare))
+	mux.Handle("GET /shares/config", read(s.getMailboxConfig))
+	mux.Handle("PUT /shares/config", write(s.putMailboxConfig))
+
 	// items
 	mux.Handle("GET /items", read(s.listItems))
 	mux.Handle("POST /items", write(s.createItem))
