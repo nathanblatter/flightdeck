@@ -3,25 +3,28 @@
 // instances themselves are localhost/tailnet-only, so this is the one piece
 // that has to be reachable from the open internet.
 //
-// It never sees project data. Messages are encrypted end-to-end by the
+// It never sees project data. Message bodies are encrypted end-to-end by the
 // instances, so this process is a courier carrying sealed envelopes.
+//
+// Access is mutual-TLS: a caller must present a client certificate signed by
+// this host's own CA, or the TLS handshake fails before any HTTP is parsed.
+// That property holds with this source public, because it rests on possession
+// of a private key rather than on anything secret in the code.
+//
+// Usage:
+//
+//	flightdeck-mailbox serve          run the server (default)
+//	flightdeck-mailbox issue <name>   mint a client bundle for one instance
+//	flightdeck-mailbox fingerprint    print the CA fingerprint clients pin
+//	flightdeck-mailbox version
 package main
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/hex"
-	"encoding/pem"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"math/big"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -38,48 +41,83 @@ var Version = "dev"
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
-	if len(os.Args) > 1 && os.Args[1] == "version" {
-		fmt.Println(Version)
-		return
+	cmd := "serve"
+	if len(os.Args) > 1 {
+		cmd = os.Args[1]
 	}
+	switch cmd {
+	case "serve":
+		runServe()
+	case "issue":
+		runIssue()
+	case "fingerprint":
+		runFingerprint()
+	case "version":
+		fmt.Println(Version)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown command %q\n\nusage: flightdeck-mailbox [serve|issue <name>|fingerprint|version]\n", cmd)
+		os.Exit(2)
+	}
+}
 
-	dataDir := env("MAILBOX_DATA_DIR", "/var/lib/flightdeck-mailbox")
-	addr := env("MAILBOX_ADDR", ":8443")
+func dataDir() string { return env("MAILBOX_DATA_DIR", "/var/lib/flightdeck-mailbox") }
+
+func env(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func runServe() {
+	dir := dataDir()
+	addr := env("MAILBOX_ADDR", ":443")
 	adminToken := os.Getenv("MAILBOX_ADMIN_TOKEN")
 	if adminToken == "" {
 		log.Fatal("MAILBOX_ADMIN_TOKEN is required (gates mailbox creation)")
 	}
+	if len(adminToken) < 32 {
+		// The source is public, so this token is the only thing standing between
+		// a valid client certificate and unlimited mailbox creation.
+		log.Fatal("MAILBOX_ADMIN_TOKEN must be at least 32 characters")
+	}
 
-	store, err := mailbox.NewStore(filepath.Join(dataDir, "mailboxes"))
+	store, err := mailbox.NewStore(filepath.Join(dir, "mailboxes"))
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
-	srv := mailbox.NewServer(store, adminToken)
-
-	// There is no domain here — instances reach this by bare IP, and public CAs
-	// don't issue for IPs. So the server presents a self-signed cert and the
-	// invite code carries its fingerprint for the client to pin. No DNS, no CA,
-	// no renewals. TLS is protecting the mailbox tokens and metadata; the
-	// message bodies are already encrypted end-to-end underneath it.
-	certPath := filepath.Join(dataDir, "cert.pem")
-	keyPath := filepath.Join(dataDir, "key.pem")
-	fingerprint, err := ensureCert(certPath, keyPath, strings.Fields(os.Getenv("MAILBOX_SANS")))
+	pki := mailbox.NewPKI(filepath.Join(dir, "pki"))
+	fingerprint, err := pki.EnsureCA()
+	if err != nil {
+		log.Fatalf("ca: %v", err)
+	}
+	sans := strings.Fields(os.Getenv("MAILBOX_SANS"))
+	if err := pki.EnsureServerCert(sans); err != nil {
+		log.Fatalf("server cert: %v", err)
+	}
+	tlsCfg, err := pki.ServerTLSConfig()
 	if err != nil {
 		log.Fatalf("tls: %v", err)
 	}
 
-	log.Printf("flightdeck-mailbox %s listening on %s", Version, addr)
-	log.Printf("data dir: %s", dataDir)
-	log.Printf("CERT FINGERPRINT (goes in every invite code):\n    %s", fingerprint)
-
+	srv := mailbox.NewServer(store, adminToken)
 	httpSrv := &http.Server{
-		Addr:              addr,
-		Handler:           srv.Handler(),
+		Addr:      addr,
+		Handler:   withClientIdentity(srv.Handler()),
+		TLSConfig: tlsCfg,
+		// Bounded so a stalled or malicious peer can't pin a connection open
+		// indefinitely and exhaust the process.
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+		ErrorLog:          log.New(handshakeLogFilter{}, "", 0),
 	}
+
+	log.Printf("flightdeck-mailbox %s listening on %s (mutual TLS required)", Version, addr)
+	log.Printf("data dir: %s", dir)
+	log.Printf("CA fingerprint: %s", fingerprint)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -90,110 +128,84 @@ func main() {
 		_ = httpSrv.Shutdown(shutCtx)
 	}()
 
-	if err := httpSrv.ListenAndServeTLS(certPath, keyPath); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	// Certificates come from TLSConfig, so the file arguments are empty.
+	if err := httpSrv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("serve: %v", err)
 	}
 	log.Print("shut down")
 }
 
-func env(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
-
-// ensureCert returns the SHA-256 fingerprint of the server certificate,
-// generating a self-signed one on first run. The cert is persisted so the
-// fingerprint stays stable across restarts — it is baked into invite codes that
-// clients have already stored, and rotating it invalidates every share.
-func ensureCert(certPath, keyPath string, sans []string) (string, error) {
-	if der, err := readCertDER(certPath); err == nil {
-		return fingerprintOf(der), nil
-	}
-	if err := os.MkdirAll(filepath.Dir(certPath), 0o700); err != nil {
-		return "", err
-	}
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return "", err
-	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return "", err
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "flightdeck-mailbox"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		// Long-lived on purpose: clients pin the fingerprint rather than trust a
-		// chain, so expiry buys nothing and a rotation would break every
-		// outstanding invite code.
-		NotAfter:              time.Now().AddDate(10, 0, 0),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	for _, s := range sans {
-		if ip := net.ParseIP(s); ip != nil {
-			tmpl.IPAddresses = append(tmpl.IPAddresses, ip)
-		} else {
-			tmpl.DNSNames = append(tmpl.DNSNames, s)
+// withClientIdentity logs which instance is calling, using the client
+// certificate's common name. The server needs no other notion of identity —
+// the name is proven by the handshake, not claimed in a header.
+func withClientIdentity(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := "unknown"
+		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+			name = r.TLS.PeerCertificates[0].Subject.CommonName
 		}
-	}
-	if len(tmpl.IPAddresses) == 0 && len(tmpl.DNSNames) == 0 {
-		tmpl.IPAddresses = []net.IP{net.ParseIP("127.0.0.1")}
-	}
-
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		return "", err
-	}
-	if err := writePEM(certPath, "CERTIFICATE", der, 0o600); err != nil {
-		return "", err
-	}
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		return "", err
-	}
-	if err := writePEM(keyPath, "EC PRIVATE KEY", keyDER, 0o600); err != nil {
-		return "", err
-	}
-	log.Printf("generated self-signed certificate at %s", certPath)
-	return fingerprintOf(der), nil
+		// A panic in a handler must not take down the process and every other
+		// instance's sync with it.
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("panic serving %s %s for %q: %v", r.Method, r.URL.Path, name, rec)
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
-func readCertDER(path string) ([]byte, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+// handshakeLogFilter drops the routine TLS handshake errors that an
+// internet-facing port produces constantly — scanners and bots with no client
+// certificate. They are the system working as designed; logging each one buries
+// real errors and hands an attacker a way to fill the disk.
+type handshakeLogFilter struct{}
+
+func (handshakeLogFilter) Write(p []byte) (int, error) {
+	msg := string(p)
+	switch {
+	case strings.Contains(msg, "tls: client didn't provide a certificate"),
+		strings.Contains(msg, "tls: bad certificate"),
+		strings.Contains(msg, "tls: first record does not look like a TLS handshake"),
+		strings.Contains(msg, "tls: unknown certificate authority"),
+		strings.Contains(msg, "remote error"),
+		strings.Contains(msg, "EOF"):
+		return len(p), nil
 	}
-	blk, _ := pem.Decode(b)
-	if blk == nil {
-		return nil, errors.New("no PEM block in certificate")
-	}
-	return blk.Bytes, nil
+	log.Print("http: " + strings.TrimSpace(msg))
+	return len(p), nil
 }
 
-// fingerprintOf formats the cert digest the way the invite code carries it:
-// colon-separated uppercase hex, the same shape browsers and openssl print.
-func fingerprintOf(der []byte) string {
-	sum := sha256.Sum256(der)
-	h := strings.ToUpper(hex.EncodeToString(sum[:]))
-	parts := make([]string, 0, len(h)/2)
-	for i := 0; i < len(h); i += 2 {
-		parts = append(parts, h[i:i+2])
+// runIssue mints a client bundle for one flightdeck instance and prints it as
+// JSON. This is the only way in: an instance without a bundle cannot complete a
+// handshake, no matter what else it knows.
+func runIssue() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: flightdeck-mailbox issue <instance-name>")
+		os.Exit(2)
 	}
-	return strings.Join(parts, ":")
+	pki := mailbox.NewPKI(filepath.Join(dataDir(), "pki"))
+	if _, err := pki.EnsureCA(); err != nil {
+		log.Fatalf("ca: %v", err)
+	}
+	bundle, err := pki.IssueClient(os.Args[2])
+	if err != nil {
+		log.Fatalf("issue: %v", err)
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(bundle); err != nil {
+		log.Fatalf("encode: %v", err)
+	}
+	fmt.Fprintf(os.Stderr, "\nissued client certificate for %q — this bundle contains a private key, treat it like one\n", bundle.Name)
 }
 
-func writePEM(path, blockType string, der []byte, perm os.FileMode) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+func runFingerprint() {
+	pki := mailbox.NewPKI(filepath.Join(dataDir(), "pki"))
+	fp, err := pki.CAFingerprint()
 	if err != nil {
-		return err
+		log.Fatalf("fingerprint: %v", err)
 	}
-	defer f.Close()
-	return pem.Encode(f, &pem.Block{Type: blockType, Bytes: der})
+	fmt.Println(fp)
 }
