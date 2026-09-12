@@ -12,6 +12,7 @@ import {
 } from "./api";
 import { projectTreeOrder, updateNotice } from "./lib";
 import { SetupWizard } from "./components/SetupWizard";
+import { AcceptInvite } from "./components/Sharing";
 import { Board } from "./components/Board";
 import { ActivityFeed } from "./components/ActivityFeed";
 import { ProjectDrawer } from "./components/ProjectDrawer";
@@ -146,6 +147,7 @@ function Dashboard({
   const [search, setSearch] = useState("");
   const [adding, setAdding] = useState(false);
   const [addingProject, setAddingProject] = useState(false);
+  const [joining, setJoining] = useState(false);
   const [drawerSlug, setDrawerSlug] = useState<string | null>(null);
   const [linksItem, setLinksItem] = useState<Item | null>(null);
 
@@ -246,6 +248,9 @@ function Dashboard({
         <button className="btn" onClick={() => setAddingProject((a) => !a)}>
           + Project
         </button>
+        <button className="btn" onClick={() => setJoining((j) => !j)}>
+          Join shared
+        </button>
         <button
           className="btn ghost"
           title="Sign out"
@@ -340,6 +345,7 @@ function Dashboard({
       {addingProject && (
         <NewProject projects={projects} onDone={() => setAddingProject(false)} />
       )}
+      {joining && <AcceptInvite onDone={() => setJoining(false)} />}
 
       <main className="content">
         {projectsQ.isLoading ? (

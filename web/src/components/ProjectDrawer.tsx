@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type Project } from "../api";
 import { projectColor, projectTreeOrder, relativeTime, TYPE_GLYPH } from "../lib";
+import { ProjectSharing } from "./Sharing";
 
 export function ProjectDrawer({
   slug,
@@ -235,6 +236,8 @@ export function ProjectDrawer({
                 )}
               </ul>
             </section>
+
+            <ProjectSharing slug={slug} projectId={data.project.id} />
 
             <section className="danger-zone">
               <h3 className="section-title">Danger zone</h3>

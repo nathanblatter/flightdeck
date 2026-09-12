@@ -15,6 +15,28 @@ export function clearApiKey() {
 
 export type ProjectStatus = "active" | "paused" | "done" | "archived";
 
+/** A live link between this project and one on another flightdeck instance. */
+export interface Share {
+  id: string;
+  project_id: string;
+  peer_name: string;
+  mailbox_url: string;
+  enabled: boolean;
+  last_send_at?: string;
+  last_recv_at?: string;
+  last_error?: string;
+  created_at: string;
+}
+
+/** Whether this instance can share at all, and whether it can create invites. */
+export interface ShareConfig {
+  url: string;
+  configured: boolean;
+  /** Creating an invite needs the mailbox admin token; joining one does not. */
+  can_create: boolean;
+  has_client_cert: boolean;
+}
+
 /** What a project purge destroyed — reported back so the UI can confirm it. */
 export interface ProjectPurgeCounts {
   items: number;
@@ -334,6 +356,20 @@ export const api = {
     req<Project>("PATCH", `/projects/${slug}`, body),
   createProject: (body: { slug: string; name: string; summary?: string; parent?: string }) =>
     req<Project>("POST", "/projects", body),
+  shares: () => req<Share[]>("GET", "/shares"),
+  // The invite carries the project's encryption key and is returned exactly
+  // once — it is never retrievable again, only revoked and re-issued.
+  shareProject: (body: { project: string; peer_name?: string }) =>
+    req<{ invite: string; note: string }>("POST", "/shares", body),
+  acceptInvite: (body: { invite: string; slug?: string }) =>
+    req<{ project_id: string }>("POST", "/shares/accept", body),
+  deleteShare: (id: string) => req<void>("DELETE", `/shares/${id}`),
+  shareConfig: () => req<ShareConfig>("GET", "/shares/config"),
+  putShareConfig: (body: {
+    url: string; admin_token?: string;
+    client_cert: string; client_key: string; ca_pem: string;
+  }) => req<void>("PUT", "/shares/config", body),
+
   // Irreversible: hard-deletes the project's items and activity. The server
   // refuses unless the project is already archived and has no children, and
   // requires `confirm` to repeat the slug.
