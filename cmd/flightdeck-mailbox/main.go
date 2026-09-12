@@ -100,7 +100,7 @@ func runServe() {
 		log.Fatalf("tls: %v", err)
 	}
 
-	srv := mailbox.NewServer(store, adminToken)
+	srv := mailbox.NewServer(store, adminToken).WithPKI(pki)
 	httpSrv := &http.Server{
 		Addr:      addr,
 		Handler:   withClientIdentity(srv.Handler()),

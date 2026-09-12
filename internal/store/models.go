@@ -132,6 +132,36 @@ type Project struct {
 	ParentSlug   *string   `json:"parent_slug"`
 }
 
+type ProjectShare struct {
+	ID          uuid.UUID  `json:"id"`
+	ProjectID   uuid.UUID  `json:"project_id"`
+	PeerName    string     `json:"peer_name"`
+	MailboxUrl  string     `json:"mailbox_url"`
+	SendMailbox string     `json:"send_mailbox"`
+	SendToken   string     `json:"send_token"`
+	RecvMailbox string     `json:"recv_mailbox"`
+	RecvToken   string     `json:"recv_token"`
+	Secret      []byte     `json:"secret"`
+	ClientCert  string     `json:"client_cert"`
+	ClientKey   string     `json:"client_key"`
+	CaPem       string     `json:"ca_pem"`
+	Enabled     bool       `json:"enabled"`
+	LastSendAt  *time.Time `json:"last_send_at"`
+	LastRecvAt  *time.Time `json:"last_recv_at"`
+	LastError   string     `json:"last_error"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+type ProjectShareState struct {
+	ShareID    uuid.UUID `json:"share_id"`
+	EntityKind string    `json:"entity_kind"`
+	EntityID   uuid.UUID `json:"entity_id"`
+	SentHash   string    `json:"sent_hash"`
+	BaseHash   string    `json:"base_hash"`
+	SyncedAt   time.Time `json:"synced_at"`
+}
+
 type SearchLog struct {
 	ID           int64     `json:"id"`
 	SearchedAt   time.Time `json:"searched_at"`

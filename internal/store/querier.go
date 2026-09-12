@@ -34,6 +34,7 @@ type Querier interface {
 	CreateItemLink(ctx context.Context, arg CreateItemLinkParams) (ItemLink, error)
 	CreateItemRef(ctx context.Context, arg CreateItemRefParams) (ItemRef, error)
 	CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error)
+	CreateProjectShare(ctx context.Context, arg CreateProjectShareParams) (ProjectShare, error)
 	CreateWebhook(ctx context.Context, arg CreateWebhookParams) (Webhook, error)
 	DailyToolCalls(ctx context.Context, calledAt time.Time) ([]DailyToolCallsRow, error)
 	DeleteAttachment(ctx context.Context, id uuid.UUID) (Attachment, error)
@@ -43,6 +44,7 @@ type Querier interface {
 	// re-rooted by the parent_slug ON DELETE SET NULL (the service refuses the
 	// delete when children exist, so that path is a backstop, not the contract).
 	DeleteProject(ctx context.Context, slug string) (Project, error)
+	DeleteProjectShare(ctx context.Context, id uuid.UUID) error
 	DeleteWebhook(ctx context.Context, id uuid.UUID) error
 	// Semantic-tier backfill health: how many live items are embedded vs poison
 	// ('failed'), and the same for high-signal activity (the kinds the embedder
@@ -60,9 +62,12 @@ type Querier interface {
 	// cross-project key reuse must not return another project's item.
 	GetItemByIdempotencyKey(ctx context.Context, arg GetItemByIdempotencyKeyParams) (Item, error)
 	GetItemByRef(ctx context.Context, lower string) (Item, error)
+	GetItemForSync(ctx context.Context, id uuid.UUID) (Item, error)
 	GetProjectByID(ctx context.Context, id uuid.UUID) (Project, error)
 	GetProjectBySlug(ctx context.Context, slug string) (Project, error)
+	GetProjectShare(ctx context.Context, id uuid.UUID) (ProjectShare, error)
 	GetSetting(ctx context.Context, key string) (Setting, error)
+	GetShareState(ctx context.Context, arg GetShareStateParams) (ProjectShareState, error)
 	// Upsert so marking a row 'failed' and later embedding it (or vice versa in a
 	// race) never errors.
 	InsertActivityEmbedding(ctx context.Context, arg InsertActivityEmbeddingParams) error
@@ -76,6 +81,7 @@ type Querier interface {
 	// Webhooks subscribed to this project (or all projects) and this event (or all).
 	ListActiveWebhooksForEvent(ctx context.Context, arg ListActiveWebhooksForEventParams) ([]Webhook, error)
 	ListActivity(ctx context.Context, arg ListActivityParams) ([]Activity, error)
+	ListActivityForSync(ctx context.Context, projectID uuid.UUID) ([]Activity, error)
 	// Any activity with a non-empty body that has no embedding yet. Rows with a 'failed' marker are poison
 	// and skipped. Activity is immutable, so there is no re-embed-on-edit path.
 	ListActivityNeedingEmbedding(ctx context.Context, lim int32) ([]ListActivityNeedingEmbeddingRow, error)
@@ -89,6 +95,8 @@ type Querier interface {
 	ListBlockingEdgesByProject(ctx context.Context, projectID uuid.UUID) ([]ListBlockingEdgesByProjectRow, error)
 	ListChildProjects(ctx context.Context, parentSlug *string) ([]ListChildProjectsRow, error)
 	ListContextImpactEvents(ctx context.Context, arg ListContextImpactEventsParams) ([]ContextImpactEvent, error)
+	// Drives the sync loop: every share it should be exchanging messages for.
+	ListEnabledProjectShares(ctx context.Context) ([]ProjectShare, error)
 	// Dead-lettered / erroring events for operator visibility (last_error set).
 	ListFailedWebhookEvents(ctx context.Context, limit int32) ([]WebhookEvent, error)
 	ListItemRefs(ctx context.Context, itemID uuid.UUID) ([]ItemRef, error)
@@ -97,6 +105,9 @@ type Querier interface {
 	// resolvable project chip, since the project is gone from the listing) would
 	// defeat the point.
 	ListItems(ctx context.Context, arg ListItemsParams) ([]Item, error)
+	// Everything in the project, soft-deleted rows included: a deletion is a change
+	// the peer needs to hear about.
+	ListItemsForSync(ctx context.Context, projectID uuid.UUID) ([]Item, error)
 	// Live items whose embedding is missing (never embedded, or invalidated by a
 	// content edit). The background embedder drains this in batches. Rows marked
 	// embedding_model='failed' are poison (repeatedly rejected) and skipped so one
@@ -107,6 +118,7 @@ type Querier interface {
 	// open blocker. Used to annotate /items list responses with blocked flags.
 	ListOpenBlockingEdges(ctx context.Context) ([]ListOpenBlockingEdgesRow, error)
 	ListOpenItemsByProject(ctx context.Context, arg ListOpenItemsByProjectParams) ([]Item, error)
+	ListProjectShares(ctx context.Context) ([]ProjectShare, error)
 	// Archived projects are excluded unless asked for by name (status='archived').
 	// That exclusion is what makes archiving mean something: without it 'archived'
 	// is just a label and the project still clutters every orient read and picker.
@@ -121,6 +133,8 @@ type Querier interface {
 	ListRecentDecisionsByProject(ctx context.Context, arg ListRecentDecisionsByProjectParams) ([]Activity, error)
 	ListRejectedByProject(ctx context.Context, arg ListRejectedByProjectParams) ([]Activity, error)
 	ListSettings(ctx context.Context) ([]Setting, error)
+	ListShareStateHashes(ctx context.Context, shareID uuid.UUID) ([]ListShareStateHashesRow, error)
+	ListSharesForProject(ctx context.Context, projectID uuid.UUID) ([]ProjectShare, error)
 	// in_progress items whose last update is older than the cutoff.
 	ListStaleInProgress(ctx context.Context, updatedAt time.Time) ([]ListStaleInProgressRow, error)
 	// active projects whose latest activity is newer than the last summary refresh.
@@ -155,6 +169,22 @@ type Querier interface {
 	PurgeSoftDeletedItems(ctx context.Context, deletedAt *time.Time) (int64, error)
 	RecentToolErrors(ctx context.Context, calledAt time.Time) ([]RecentToolErrorsRow, error)
 	RecentZeroResultSearches(ctx context.Context, searchedAt time.Time) ([]RecentZeroResultSearchesRow, error)
+	// After applying a peer's change both sides hold this content, so it becomes
+	// the new agreed base AND the echo guard.
+	RecordApplied(ctx context.Context, arg RecordAppliedParams) error
+	// A conflict merge produces content the peer has NOT seen. base_hash advances
+	// to the merged result, but sent_hash is left behind so the outbound pass
+	// notices the difference and pushes the merge back to the peer.
+	RecordMergedBase(ctx context.Context, arg RecordMergedBaseParams) error
+	// Advances only the echo guard. base_hash is deliberately untouched: we have
+	// put this content on the wire, but the peer has not confirmed it, and it may
+	// be editing the same row right now.
+	RecordSent(ctx context.Context, arg RecordSentParams) error
+	// Surfaced in the UI so a share that silently stopped working is visible
+	// rather than just quietly stale.
+	RecordShareError(ctx context.Context, arg RecordShareErrorParams) error
+	RecordShareRecv(ctx context.Context, id uuid.UUID) error
+	RecordShareSend(ctx context.Context, id uuid.UUID) error
 	// delivered_hook_ids records the subscribers that already ACKed this event, so
 	// the retry only re-POSTs to the ones still failing (no duplicate deliveries).
 	RescheduleWebhookEvent(ctx context.Context, arg RescheduleWebhookEventParams) error
@@ -182,6 +212,7 @@ type Querier interface {
 	// the embedder isn't clobbered with a stale vector.
 	SetItemEmbedding(ctx context.Context, arg SetItemEmbeddingParams) error
 	SetProjectInstructions(ctx context.Context, arg SetProjectInstructionsParams) (Project, error)
+	SetShareEnabled(ctx context.Context, arg SetShareEnabledParams) error
 	SoftDeleteItem(ctx context.Context, id uuid.UUID) (Item, error)
 	// Per-tool behavior over a window: volume, error count, latency percentiles,
 	// and average result size (the token-cost proxy agents pay to call it).
@@ -196,6 +227,13 @@ type Querier interface {
 	UpdateProject(ctx context.Context, arg UpdateProjectParams) (Project, error)
 	UpdateProjectSummary(ctx context.Context, arg UpdateProjectSummaryParams) (Project, error)
 	UpsertSetting(ctx context.Context, arg UpsertSettingParams) error
+	// Activity is append-only, so a conflict means we have already seen this row
+	// and there is nothing to change.
+	UpsertSyncedActivity(ctx context.Context, arg UpsertSyncedActivityParams) error
+	// Applies a peer's item. Matched on the shared UUID, never on ref/seq, which
+	// are per-instance. seq is supplied so the items_assign_ref trigger (which
+	// fires only WHEN NEW.seq IS NULL) assigns this instance's own local ref.
+	UpsertSyncedItem(ctx context.Context, arg UpsertSyncedItemParams) (Item, error)
 }
 
 var _ Querier = (*Queries)(nil)

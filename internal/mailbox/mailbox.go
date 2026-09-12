@@ -341,11 +341,18 @@ func (s *Store) Delete(id string) error {
 type Server struct {
 	store      *Store
 	adminToken string
+	// pki, when set, lets an admin-authenticated instance mint a client bundle
+	// for the peer it is inviting. Without this the peer could never complete a
+	// handshake, since bundles are only issuable where the CA key lives.
+	pki *PKI
 }
 
 func NewServer(store *Store, adminToken string) *Server {
 	return &Server{store: store, adminToken: adminToken}
 }
+
+// WithPKI enables the client-issuing endpoint.
+func (s *Server) WithPKI(p *PKI) *Server { s.pki = p; return s }
 
 // Handler mounts the v1 protocol. The version is in the path because this
 // eventually ships to strangers on mismatched versions, and the server must be
@@ -357,6 +364,7 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write([]byte("ok"))
 	})
 	mux.HandleFunc("POST /v1/mailboxes", s.create)
+	mux.HandleFunc("POST /v1/clients", s.issueClient)
 	mux.HandleFunc("DELETE /v1/mailboxes/{id}", s.del)
 	mux.HandleFunc("POST /v1/mailboxes/{id}/messages", s.send)
 	mux.HandleFunc("GET /v1/mailboxes/{id}/messages", s.receive)
@@ -404,6 +412,35 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{
 		"id": id, "write_token": writeToken, "read_token": readToken,
 	})
+}
+
+// issueClient mints a client bundle so an instance creating a share can hand
+// its peer the credentials to reach this host at all. Admin-gated and, like
+// every other route, only reachable by a caller that already completed a mutual
+// TLS handshake — so this cannot be used to bootstrap a first way in.
+func (s *Server) issueClient(w http.ResponseWriter, r *http.Request) {
+	if s.adminToken == "" || subtle.ConstantTimeCompare([]byte(bearer(r)), []byte(s.adminToken)) != 1 {
+		writeErr(w, http.StatusUnauthorized, "admin token required")
+		return
+	}
+	if s.pki == nil {
+		writeErr(w, http.StatusNotImplemented, "this host cannot issue client certificates")
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "decode request")
+		return
+	}
+	bundle, err := s.pki.IssueClient(req.Name)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	log.Printf("mailbox: issued client certificate for %q", bundle.Name)
+	writeJSON(w, http.StatusCreated, bundle)
 }
 
 // auth resolves the mailbox and checks the presented token against the
