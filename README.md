@@ -181,6 +181,11 @@ under an existing key returns a conflict. Impact events stay outside the
 project activity feed so measurement does not become context noise. Raw
 reports are available through `GET /api/context-impact`.
 
+The usage report (`GET /api/usage?days=`, MCP `usage_report`) also carries an
+`actors` block: per-caller calls, errors, orient vs write counts, searches,
+latency, and top tools. The actor is the API key's name, and OAuth tokens
+inherit it, so one key per client or device gives per-device telemetry.
+
 The existing REST and MCP usage report includes a `context_effectiveness`
 section with contribution, prevented-error, duplicate-work-avoidance, harm,
 and estimated-time measures across distinct `(actor, session_id)` pairs. Its

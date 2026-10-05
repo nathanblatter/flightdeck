@@ -423,11 +423,15 @@ type UsageReport struct {
 	Tools       []ToolUsage `json:"tools"`
 	// UnusedTools are registered tools with zero calls in the window —
 	// candidates for removal, or a sign agents don't know they exist.
-	UnusedTools  []string       `json:"unused_tools,omitempty"`
-	TopProjects  []ProjectCalls `json:"top_projects,omitempty"`
-	Daily        []DayCalls     `json:"daily,omitempty"`
-	RecentErrors []ToolError    `json:"recent_errors,omitempty"`
-	Search       SearchUsage    `json:"search"`
+	UnusedTools []string       `json:"unused_tools,omitempty"`
+	TopProjects []ProjectCalls `json:"top_projects,omitempty"`
+	// Actors breaks the window down by caller. The actor is the API key's
+	// name (OAuth tokens carry the name of the key they were minted from), so
+	// one key per client or device gives per-device usage for free.
+	Actors       []ActorUsage `json:"actors,omitempty"`
+	Daily        []DayCalls   `json:"daily,omitempty"`
+	RecentErrors []ToolError  `json:"recent_errors,omitempty"`
+	Search       SearchUsage  `json:"search"`
 	// ContextEffectiveness summarizes explicitly reported outcomes. It does not
 	// infer benefit from tool calls or claim a causal effect.
 	ContextEffectiveness ContextEffectiveness `json:"context_effectiveness"`
@@ -479,6 +483,23 @@ type ToolUsage struct {
 type ProjectCalls struct {
 	Project string `json:"project"`
 	Calls   int    `json:"calls"`
+}
+
+// ActorUsage is one caller's behavior over the window. OrientCalls vs
+// WriteCalls shows whether that client reads context before it writes;
+// TopTools is its five most-used tools, most-used first.
+type ActorUsage struct {
+	Actor       string    `json:"actor"`
+	Calls       int       `json:"calls"`
+	Errors      int       `json:"errors"`
+	OrientCalls int       `json:"orient_calls"`
+	WriteCalls  int       `json:"write_calls"`
+	SearchCalls int       `json:"search_calls"`
+	P50Ms       float64   `json:"p50_ms"`
+	AvgResultKB float64   `json:"avg_result_kb"`
+	TopTools    []string  `json:"top_tools"`
+	FirstUsed   time.Time `json:"first_used"`
+	LastUsed    time.Time `json:"last_used"`
 }
 
 type DayCalls struct {

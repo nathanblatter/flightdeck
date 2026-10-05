@@ -17,6 +17,33 @@ WHERE called_at >= $1
 GROUP BY tool
 ORDER BY calls DESC;
 
+-- name: ActorStats :many
+-- Per-actor behavior over a window. actor is the API key name (OAuth tokens
+-- inherit it), so this is per-client/per-device usage: how much each caller
+-- does, how often it orients before writing, what it searches, and whether
+-- it errs. orient_calls counts the read-side entry points agents are meant
+-- to start from.
+SELECT actor,
+       count(*)                                                            AS calls,
+       count(*) FILTER (WHERE NOT ok)                                      AS errors,
+       count(*) FILTER (WHERE tool IN ('get_project_context', 'get_global_context', 'list_projects', 'resolve_project')) AS orient_calls,
+       count(*) FILTER (WHERE tool IN ('create_item', 'create_items', 'update_item', 'complete_item', 'log_activity',
+                                       'update_project_summary', 'set_project_instructions', 'create_project',
+                                       'archive_project', 'link_items', 'unlink_items', 'add_item_ref'))      AS write_calls,
+       count(*) FILTER (WHERE tool = 'search')                             AS search_calls,
+       (percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms))::float8  AS p50_ms,
+       COALESCE(avg(result_bytes), 0)::float8                              AS avg_result_bytes,
+       min(called_at)::timestamptz                                         AS first_used,
+       max(called_at)::timestamptz                                         AS last_used,
+       (SELECT array_agg(t ORDER BY c DESC, t)
+          FROM (SELECT tool AS t, count(*) AS c FROM tool_calls i
+                WHERE i.actor = o.actor AND i.called_at >= $1
+                GROUP BY tool ORDER BY c DESC, tool LIMIT 5) top)::text[]  AS top_tools
+FROM tool_calls o
+WHERE called_at >= $1
+GROUP BY actor
+ORDER BY calls DESC;
+
 -- name: DailyToolCalls :many
 SELECT date_trunc('day', called_at)::timestamptz AS day,
        count(*)                         AS calls,

@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"flightdeck/internal/dto"
 	"flightdeck/internal/service"
 	"flightdeck/internal/store"
 )
@@ -213,6 +214,9 @@ func TestUsageAnalytics(t *testing.T) {
 	svc.RecordToolCall(ctx, service.ToolCall{
 		Tool: "get_item", Actor: "tester", OK: false, Err: "no item with id or ref \"nope\"",
 	})
+	// A second caller (as a phone connector key would appear) that orients first.
+	svc.RecordToolCall(ctx, service.ToolCall{Tool: "get_project_context", Actor: "phone", Project: "alpha", OK: true, ResultBytes: 2048})
+	svc.RecordToolCall(ctx, service.ToolCall{Tool: "log_activity", Actor: "phone", Project: "alpha", OK: true})
 
 	// SearchSmart logs a search_log row: one FTS hit, then a zero-result query.
 	if _, _, err := svc.SearchSmart(ctx, "widget", pgtype.UUID{}, nil, nil, 0, 0); err != nil {
@@ -240,8 +244,25 @@ func TestUsageAnalytics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("usage report: %v", err)
 	}
-	if rep.TotalCalls != 2 || rep.TotalErrors != 1 {
-		t.Fatalf("calls/errors = %d/%d, want 2/1", rep.TotalCalls, rep.TotalErrors)
+	if rep.TotalCalls != 4 || rep.TotalErrors != 1 {
+		t.Fatalf("calls/errors = %d/%d, want 4/1", rep.TotalCalls, rep.TotalErrors)
+	}
+	// Per-actor breakdown: both callers present, most calls first, and the
+	// orient/write split attributed to the right one.
+	if len(rep.Actors) != 2 {
+		t.Fatalf("actors = %+v, want 2", rep.Actors)
+	}
+	byActor := map[string]dto.ActorUsage{}
+	for _, a := range rep.Actors {
+		byActor[a.Actor] = a
+	}
+	tester, phone := byActor["tester"], byActor["phone"]
+	if tester.Calls != 2 || tester.Errors != 1 || tester.WriteCalls != 1 || tester.OrientCalls != 0 {
+		t.Fatalf("tester actor = %+v", tester)
+	}
+	if phone.Calls != 2 || phone.Errors != 0 || phone.OrientCalls != 1 || phone.WriteCalls != 1 ||
+		len(phone.TopTools) != 2 || phone.AvgResultKB != 1 {
+		t.Fatalf("phone actor = %+v", phone)
 	}
 	if len(rep.UnusedTools) != 1 || rep.UnusedTools[0] != "digest" {
 		t.Fatalf("unused tools = %v, want [digest]", rep.UnusedTools)
