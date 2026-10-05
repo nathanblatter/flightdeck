@@ -118,7 +118,7 @@ func TestMCPResultsSingleEncoded(t *testing.T) {
 func TestMCPRecordContextImpact(t *testing.T) {
 	st, svc := setup(t)
 	mkProject(t, st, "alpha")
-	if _, err := st.Pool.Exec(context.Background(), `TRUNCATE api_keys`); err != nil {
+	if _, err := st.Pool.Exec(context.Background(), `TRUNCATE api_keys CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	readKey := "fd_test_mcp_impact_read"

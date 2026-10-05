@@ -21,6 +21,7 @@ import (
 	"flightdeck/internal/blob"
 	mcpserver "flightdeck/internal/mcp"
 	"flightdeck/internal/metrics"
+	"flightdeck/internal/oauth"
 	"flightdeck/internal/service"
 	"flightdeck/internal/store"
 	syncengine "flightdeck/internal/sync"
@@ -173,9 +174,24 @@ func runServe() {
 		spa.ServeHTTP(w, r)
 	}))
 
+	// Public connector surface (claude.ai / Claude mobile). Enabled by
+	// FLIGHTDECK_PUBLIC_URL, the https origin a tunnel forwards to this
+	// process. Requests arriving under that hostname see a separate, minimal
+	// mux: OAuth + discovery + a bearer-only /mcp. The UI, /api, /metrics and
+	// raw API keys never exist on the public side, whatever the tunnel routes.
+	var handler http.Handler = mux
+	if pub := os.Getenv("FLIGHTDECK_PUBLIC_URL"); pub != "" {
+		publicMux, host, err := oauth.PublicHandler(st, pub, mcpserver.NewPublicHandler(st, svc, Version, upd))
+		if err != nil {
+			log.Fatalf("FLIGHTDECK_PUBLIC_URL: %v", err)
+		}
+		log.Printf("public connector enabled for %s (OAuth + /mcp only)", host)
+		handler = oauth.SplitByHost(host, publicMux, mux)
+	}
+
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           metrics.HTTPMiddleware(withLogging(mux)),
+		Handler:           metrics.HTTPMiddleware(withLogging(handler)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

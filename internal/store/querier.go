@@ -13,6 +13,12 @@ import (
 
 type Querier interface {
 	ActivityKindCountsSince(ctx context.Context, arg ActivityKindCountsSinceParams) ([]ActivityKindCountsSinceRow, error)
+	// Single use: the UPDATE only matches an unused, unexpired code, so a replay
+	// gets no row.
+	ConsumeOAuthCode(ctx context.Context, codeHash string) (OauthCode, error)
+	// Rotation: revoke the row holding this refresh token and hand back what is
+	// needed to mint its successor. A replayed refresh token matches nothing.
+	ConsumeOAuthRefresh(ctx context.Context, refreshHash string) (OauthToken, error)
 	ContextEffectivenessSummary(ctx context.Context, recordedAt time.Time) (ContextEffectivenessSummaryRow, error)
 	CountActiveAPIKeys(ctx context.Context) (int64, error)
 	CountActivitySince(ctx context.Context, arg CountActivitySinceParams) (int64, error)
@@ -33,6 +39,9 @@ type Querier interface {
 	CreateItem(ctx context.Context, arg CreateItemParams) (Item, error)
 	CreateItemLink(ctx context.Context, arg CreateItemLinkParams) (ItemLink, error)
 	CreateItemRef(ctx context.Context, arg CreateItemRefParams) (ItemRef, error)
+	CreateOAuthClient(ctx context.Context, arg CreateOAuthClientParams) (OauthClient, error)
+	CreateOAuthCode(ctx context.Context, arg CreateOAuthCodeParams) error
+	CreateOAuthToken(ctx context.Context, arg CreateOAuthTokenParams) (OauthToken, error)
 	CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error)
 	CreateProjectShare(ctx context.Context, arg CreateProjectShareParams) (ProjectShare, error)
 	CreateWebhook(ctx context.Context, arg CreateWebhookParams) (Webhook, error)
@@ -63,6 +72,9 @@ type Querier interface {
 	GetItemByIdempotencyKey(ctx context.Context, arg GetItemByIdempotencyKeyParams) (Item, error)
 	GetItemByRef(ctx context.Context, lower string) (Item, error)
 	GetItemForSync(ctx context.Context, id uuid.UUID) (Item, error)
+	GetOAuthClient(ctx context.Context, id string) (OauthClient, error)
+	// Joins the backing key so a revoked or expired key invalidates its tokens.
+	GetOAuthTokenByAccessHash(ctx context.Context, accessHash string) (GetOAuthTokenByAccessHashRow, error)
 	GetProjectByID(ctx context.Context, id uuid.UUID) (Project, error)
 	GetProjectBySlug(ctx context.Context, slug string) (Project, error)
 	GetProjectShare(ctx context.Context, id uuid.UUID) (ProjectShare, error)
@@ -157,6 +169,8 @@ type Querier interface {
 	// raced a cycle past validation.
 	ProjectDescendants(ctx context.Context, slug string) ([]string, error)
 	PurgeDeliveredWebhookEvents(ctx context.Context, deliveredAt *time.Time) (int64, error)
+	// Maintenance: codes and tokens past every usable window.
+	PurgeExpiredOAuth(ctx context.Context) (int64, error)
 	// Trim low-signal activity (comments and auto 'created' rows) older than the
 	// cutoff. Decisions, progress, status changes, and rejections are kept — they
 	// are the durable "why" an agent reads.
@@ -219,6 +233,7 @@ type Querier interface {
 	ToolCallStats(ctx context.Context, calledAt time.Time) ([]ToolCallStatsRow, error)
 	TopProjectsByToolCalls(ctx context.Context, calledAt time.Time) ([]TopProjectsByToolCallsRow, error)
 	TouchAPIKey(ctx context.Context, id uuid.UUID) error
+	TouchOAuthToken(ctx context.Context, id uuid.UUID) error
 	// Bumps version on every write. When expected_version is supplied it acts as a
 	// compare-and-swap: a mismatch matches no row (caller maps that to a conflict).
 	UpdateItem(ctx context.Context, arg UpdateItemParams) (Item, error)

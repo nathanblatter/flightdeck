@@ -19,7 +19,7 @@ import (
 // setup() truncate leaves alone.
 func setupHTTP(t *testing.T) (*httptest.Server, *store.Store, *service.Service, string) {
 	st, svc := setup(t)
-	if _, err := st.Pool.Exec(context.Background(), `TRUNCATE api_keys, settings`); err != nil {
+	if _, err := st.Pool.Exec(context.Background(), `TRUNCATE api_keys, settings CASCADE`); err != nil {
 		t.Fatalf("truncate keys/settings: %v", err)
 	}
 	raw := "fd_test_ingest_key"
@@ -128,7 +128,7 @@ func TestIngestProjectsListsActiveSlugs(t *testing.T) {
 
 func TestSetupFlow(t *testing.T) {
 	st, svc := setup(t)
-	if _, err := st.Pool.Exec(context.Background(), `TRUNCATE api_keys, settings`); err != nil {
+	if _, err := st.Pool.Exec(context.Background(), `TRUNCATE api_keys, settings CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	svc.ReloadSettings(context.Background())

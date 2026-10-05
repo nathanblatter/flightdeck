@@ -19,6 +19,7 @@ docker compose up -d --build flightdeck
 ```
 
 - **UI / API / MCP:** http://100.79.61.79:4300 (Tailscale)
+- **Public connector (OAuth + MCP only):** https://flightdeck.nathanblatter.com
 - Health: `GET /healthz` (unauthenticated)
 - Migrations run automatically on startup (goose, embedded).
 
@@ -87,6 +88,33 @@ Tools — orient: `list_projects`, `get_project_context`, `get_global_context`,
 `update_project_summary`, `set_project_instructions`, `link_items`,
 `unlink_items`, `add_item_ref`, `list_item_refs`, `record_context_impact`,
 `archive_project`.
+
+## Public connector (claude.ai web + Claude mobile)
+
+The claude.ai "Connectors" dialog, which is also how the phone app gets MCP
+servers, needs a public https URL and only speaks OAuth, so the Tailscale
+address and `X-API-Key` cannot be used there. Setting `FLIGHTDECK_PUBLIC_URL`
+turns on an OAuth 2.1 authorization server inside the binary and a second,
+minimal surface served only under that hostname:
+
+- `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource[/mcp]` — discovery
+- `POST /oauth/register` — dynamic client registration (RFC 7591); Claude registers itself
+- `GET|POST /oauth/authorize` — the login page; the credential is an existing API key
+- `POST /oauth/token` — authorization code + PKCE S256, refresh with rotation
+- `/mcp` — bearer tokens only; a raw API key is refused on the public hostname
+
+Everything else (the UI, `/api`, `/metrics`, `/healthz`) answers 404 on the
+public hostname, so what the tunnel forwards does not matter. Tokens are
+opaque, stored hashed, and resolve to the API key they were minted from:
+same actor name on activity, same scopes, and revoking the key kills every
+token. Access tokens live an hour, refresh tokens thirty days.
+
+Deployment here is a `cloudflared` sidecar (`flightdeck-tunnel` in
+`~/docker-services/docker-compose.yml`, token in the untracked `.env`) that
+forwards `flightdeck.nathanblatter.com` to the container. To add it: Settings →
+Connectors → Add custom connector → `https://flightdeck.nathanblatter.com/mcp`,
+then paste a write-scoped key on the login page. The connector then appears
+on web, desktop and mobile.
 
 Purging an archived project is deliberately *not* an MCP tool — archiving is
 reversible so agents may do it, but destroying history is a human decision and

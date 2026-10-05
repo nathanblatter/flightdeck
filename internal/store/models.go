@@ -116,6 +116,41 @@ type ItemRef struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type OauthClient struct {
+	ID           string    `json:"id"`
+	SecretHash   *string   `json:"secret_hash"`
+	Name         string    `json:"name"`
+	RedirectUris []string  `json:"redirect_uris"`
+	AuthMethod   string    `json:"auth_method"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+type OauthCode struct {
+	CodeHash      string    `json:"code_hash"`
+	ClientID      string    `json:"client_id"`
+	ApiKeyID      uuid.UUID `json:"api_key_id"`
+	RedirectUri   string    `json:"redirect_uri"`
+	CodeChallenge string    `json:"code_challenge"`
+	Scope         string    `json:"scope"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	Used          bool      `json:"used"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+type OauthToken struct {
+	ID               uuid.UUID  `json:"id"`
+	ClientID         string     `json:"client_id"`
+	ApiKeyID         uuid.UUID  `json:"api_key_id"`
+	AccessHash       string     `json:"access_hash"`
+	RefreshHash      string     `json:"refresh_hash"`
+	Scope            string     `json:"scope"`
+	AccessExpiresAt  time.Time  `json:"access_expires_at"`
+	RefreshExpiresAt time.Time  `json:"refresh_expires_at"`
+	Revoked          bool       `json:"revoked"`
+	CreatedAt        time.Time  `json:"created_at"`
+	LastUsedAt       *time.Time `json:"last_used_at"`
+}
+
 type Project struct {
 	ID           uuid.UUID `json:"id"`
 	Slug         string    `json:"slug"`
