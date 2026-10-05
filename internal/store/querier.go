@@ -13,6 +13,12 @@ import (
 
 type Querier interface {
 	ActivityKindCountsSince(ctx context.Context, arg ActivityKindCountsSinceParams) ([]ActivityKindCountsSinceRow, error)
+	// Per-actor behavior over a window. actor is the API key name (OAuth tokens
+	// inherit it), so this is per-client/per-device usage: how much each caller
+	// does, how often it orients before writing, what it searches, and whether
+	// it errs. orient_calls counts the read-side entry points agents are meant
+	// to start from.
+	ActorStats(ctx context.Context, calledAt time.Time) ([]ActorStatsRow, error)
 	// Single use: the UPDATE only matches an unused, unexpired code, so a replay
 	// gets no row.
 	ConsumeOAuthCode(ctx context.Context, codeHash string) (OauthCode, error)

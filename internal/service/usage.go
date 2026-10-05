@@ -91,6 +91,7 @@ func (s *Service) UsageReport(ctx context.Context, days int, knownTools []string
 		stats    []store.ToolCallStatsRow
 		daily    []store.DailyToolCallsRow
 		projects []store.TopProjectsByToolCallsRow
+		actors   []store.ActorStatsRow
 		errsRows []store.RecentToolErrorsRow
 		search   store.SearchUsageSummaryRow
 		zeroQs   []store.RecentZeroResultSearchesRow
@@ -101,6 +102,7 @@ func (s *Service) UsageReport(ctx context.Context, days int, knownTools []string
 	g.Go(func() (err error) { stats, err = s.St.ToolCallStats(gctx, since); return })
 	g.Go(func() (err error) { daily, err = s.St.DailyToolCalls(gctx, since); return })
 	g.Go(func() (err error) { projects, err = s.St.TopProjectsByToolCalls(gctx, since); return })
+	g.Go(func() (err error) { actors, err = s.St.ActorStats(gctx, since); return })
 	g.Go(func() (err error) { errsRows, err = s.St.RecentToolErrors(gctx, since); return })
 	g.Go(func() (err error) { search, err = s.St.SearchUsageSummary(gctx, since); return })
 	g.Go(func() (err error) { zeroQs, err = s.St.RecentZeroResultSearches(gctx, since); return })
@@ -142,6 +144,21 @@ func (s *Service) UsageReport(ctx context.Context, days int, knownTools []string
 	}
 	for _, p := range projects {
 		rep.TopProjects = append(rep.TopProjects, dto.ProjectCalls{Project: p.Project, Calls: int(p.Calls)})
+	}
+	for _, a := range actors {
+		rep.Actors = append(rep.Actors, dto.ActorUsage{
+			Actor:       a.Actor,
+			Calls:       int(a.Calls),
+			Errors:      int(a.Errors),
+			OrientCalls: int(a.OrientCalls),
+			WriteCalls:  int(a.WriteCalls),
+			SearchCalls: int(a.SearchCalls),
+			P50Ms:       a.P50Ms,
+			AvgResultKB: a.AvgResultBytes / 1024,
+			TopTools:    a.TopTools,
+			FirstUsed:   a.FirstUsed,
+			LastUsed:    a.LastUsed,
+		})
 	}
 	for _, e := range errsRows {
 		rep.RecentErrors = append(rep.RecentErrors, dto.ToolError{Tool: e.Tool, Error: e.Error, At: e.CalledAt})

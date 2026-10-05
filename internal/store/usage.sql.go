@@ -10,6 +10,80 @@ import (
 	"time"
 )
 
+const actorStats = `-- name: ActorStats :many
+SELECT actor,
+       count(*)                                                            AS calls,
+       count(*) FILTER (WHERE NOT ok)                                      AS errors,
+       count(*) FILTER (WHERE tool IN ('get_project_context', 'get_global_context', 'list_projects', 'resolve_project')) AS orient_calls,
+       count(*) FILTER (WHERE tool IN ('create_item', 'create_items', 'update_item', 'complete_item', 'log_activity',
+                                       'update_project_summary', 'set_project_instructions', 'create_project',
+                                       'archive_project', 'link_items', 'unlink_items', 'add_item_ref'))      AS write_calls,
+       count(*) FILTER (WHERE tool = 'search')                             AS search_calls,
+       (percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms))::float8  AS p50_ms,
+       COALESCE(avg(result_bytes), 0)::float8                              AS avg_result_bytes,
+       min(called_at)::timestamptz                                         AS first_used,
+       max(called_at)::timestamptz                                         AS last_used,
+       (SELECT array_agg(t ORDER BY c DESC, t)
+          FROM (SELECT tool AS t, count(*) AS c FROM tool_calls i
+                WHERE i.actor = o.actor AND i.called_at >= $1
+                GROUP BY tool ORDER BY c DESC, tool LIMIT 5) top)::text[]  AS top_tools
+FROM tool_calls o
+WHERE called_at >= $1
+GROUP BY actor
+ORDER BY calls DESC
+`
+
+type ActorStatsRow struct {
+	Actor          string    `json:"actor"`
+	Calls          int64     `json:"calls"`
+	Errors         int64     `json:"errors"`
+	OrientCalls    int64     `json:"orient_calls"`
+	WriteCalls     int64     `json:"write_calls"`
+	SearchCalls    int64     `json:"search_calls"`
+	P50Ms          float64   `json:"p50_ms"`
+	AvgResultBytes float64   `json:"avg_result_bytes"`
+	FirstUsed      time.Time `json:"first_used"`
+	LastUsed       time.Time `json:"last_used"`
+	TopTools       []string  `json:"top_tools"`
+}
+
+// Per-actor behavior over a window. actor is the API key name (OAuth tokens
+// inherit it), so this is per-client/per-device usage: how much each caller
+// does, how often it orients before writing, what it searches, and whether
+// it errs. orient_calls counts the read-side entry points agents are meant
+// to start from.
+func (q *Queries) ActorStats(ctx context.Context, calledAt time.Time) ([]ActorStatsRow, error) {
+	rows, err := q.db.Query(ctx, actorStats, calledAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ActorStatsRow
+	for rows.Next() {
+		var i ActorStatsRow
+		if err := rows.Scan(
+			&i.Actor,
+			&i.Calls,
+			&i.Errors,
+			&i.OrientCalls,
+			&i.WriteCalls,
+			&i.SearchCalls,
+			&i.P50Ms,
+			&i.AvgResultBytes,
+			&i.FirstUsed,
+			&i.LastUsed,
+			&i.TopTools,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const dailyToolCalls = `-- name: DailyToolCalls :many
 SELECT date_trunc('day', called_at)::timestamptz AS day,
        count(*)                         AS calls,
