@@ -20,7 +20,7 @@ import (
 func setupContextImpactHTTP(t *testing.T) (*httptest.Server, *store.Store, *service.Service, string) {
 	t.Helper()
 	st, svc := setup(t)
-	if _, err := st.Pool.Exec(context.Background(), `TRUNCATE api_keys, settings`); err != nil {
+	if _, err := st.Pool.Exec(context.Background(), `TRUNCATE api_keys, settings CASCADE`); err != nil {
 		t.Fatalf("truncate keys/settings: %v", err)
 	}
 	raw := "fd_test_context_impact_key"

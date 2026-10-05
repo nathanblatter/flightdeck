@@ -63,6 +63,20 @@ func addTool[In, Out any](h *handlers, s *mcpsdk.Server, t *mcpsdk.Tool, fn func
 // NewHandler builds the MCP server, registers all tools, and returns an
 // http.Handler serving the streamable-HTTP transport (mount it at /mcp).
 func NewHandler(st *store.Store, svc *service.Service, version string, upd *update.Checker) http.Handler {
+	return newHandler(st, svc, version, upd, nil)
+}
+
+// NewPublicHandler is the variant mounted behind the public hostname. The
+// SDK's DNS-rebinding guard (403 when a loopback listener sees a non-local
+// Host) is off here: the public mux is only reached when the Host header is
+// the configured public hostname, which is a stricter allow-list, and a
+// single-host install has its tunnel talking to 127.0.0.1 with exactly that
+// Host.
+func NewPublicHandler(st *store.Store, svc *service.Service, version string, upd *update.Checker) http.Handler {
+	return newHandler(st, svc, version, upd, &mcpsdk.StreamableHTTPOptions{DisableLocalhostProtection: true})
+}
+
+func newHandler(st *store.Store, svc *service.Service, version string, upd *update.Checker, opts *mcpsdk.StreamableHTTPOptions) http.Handler {
 	h := &handlers{st: st, svc: svc, upd: upd}
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{
 		Name:    "flightdeck",
@@ -71,7 +85,7 @@ func NewHandler(st *store.Store, svc *service.Service, version string, upd *upda
 	h.register(server)
 	server.AddReceivingMiddleware(metricsMiddleware)
 	server.AddReceivingMiddleware(h.usageMiddleware)
-	return mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return server }, nil)
+	return mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return server }, opts)
 }
 
 // metricsMiddleware records per-tool RED metrics for every tools/call.

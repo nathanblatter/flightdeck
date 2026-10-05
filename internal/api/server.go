@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"flightdeck/internal/auth"
+	"flightdeck/internal/ratelimit"
 	"flightdeck/internal/service"
 	"flightdeck/internal/store"
 	"flightdeck/internal/update"
@@ -117,19 +118,22 @@ func (s *Server) Routes() http.Handler {
 
 	// ingest — public, cross-origin, and rate-limited (its key is embedded in
 	// public HTML). CORS wraps the outside so the preflight skips auth.
-	ingestLimiter := newIPLimiter(1, 10) // ~1 report/sec/IP, burst 10
-	mux.Handle("POST /ingest/bug", corsIngest(ingestLimiter.middleware(ingest(s.ingestBug))))
+	ingestLimiter := ratelimit.New(1, 10) // ~1 report/sec/IP, burst 10
+	limited := func(h http.Handler) http.Handler {
+		return ingestLimiter.Middleware(func(w http.ResponseWriter) { writeError(w, http.StatusTooManyRequests, "rate limit exceeded") }, h)
+	}
+	mux.Handle("POST /ingest/bug", corsIngest(limited(ingest(s.ingestBug))))
 	mux.Handle("OPTIONS /ingest/bug", corsIngest(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
 
 	// screenshot upload for a just-filed report — same posture as /ingest/bug,
 	// plus a source + freshness guard (see ingestUploadAttachments)
-	mux.Handle("POST /ingest/attachments/{id}", corsIngest(ingestLimiter.middleware(ingest(s.ingestUploadAttachments))))
+	mux.Handle("POST /ingest/attachments/{id}", corsIngest(limited(ingest(s.ingestUploadAttachments))))
 	mux.Handle("OPTIONS /ingest/attachments/{id}", corsIngest(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
 
 	// quick capture (Apple Shortcuts / scripts) — same posture as /ingest/bug
-	mux.Handle("POST /ingest/capture", corsIngest(ingestLimiter.middleware(ingest(s.ingestCapture))))
+	mux.Handle("POST /ingest/capture", corsIngest(limited(ingest(s.ingestCapture))))
 	mux.Handle("OPTIONS /ingest/capture", corsIngest(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
-	mux.Handle("GET /ingest/projects", corsIngest(ingestLimiter.middleware(ingest(s.ingestProjects))))
+	mux.Handle("GET /ingest/projects", corsIngest(limited(ingest(s.ingestProjects))))
 
 	// first-run setup — status is unauthenticated (the SPA must decide whether
 	// to show the wizard before any key exists); completion needs the one-time
