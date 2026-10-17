@@ -1,7 +1,6 @@
 // Package ratelimit is a small in-memory per-IP token bucket (stdlib only)
-// for throttling the public, unauthenticated surfaces: the bug-ingest endpoint
-// (its key is embedded in public HTML) and the OAuth login/token endpoints
-// (reachable from the internet by design).
+// for throttling the public, unauthenticated bug-ingest endpoint (its key is
+// embedded in public HTML).
 package ratelimit
 
 import (

@@ -1,6 +1,6 @@
-// Package auth implements X-API-Key and OAuth bearer authentication. Keys are
-// looked up in api_keys; bearer tokens in oauth_tokens, each resolving to the
-// key it was minted from.
+// Package auth implements X-API-Key authentication for the private surface
+// and holds the Identity that every surface (API keys here, Squawk tokens on
+// the public connector, see internal/public) stashes in the request context.
 // Keys are random and high-entropy, so a fast deterministic SHA-256 hash is
 // sufficient (and necessary, since we look keys up by hash).
 package auth
@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -104,32 +103,25 @@ func ActorRef(ctx context.Context) string {
 	return ""
 }
 
-// Middleware authenticates the request and enforces that the identity holds
-// requiredScope. On success the Identity is added to the request context.
-//
-// Two credentials are accepted: the X-API-Key header (agents, the SPA, the
-// ?api_key= fallback for EventSource) and an OAuth bearer token minted by the
-// public connector flow, which resolves to the api_keys row it was issued for.
+// WithIdentity records id as the authenticated caller on ctx, exactly as
+// Middleware does after resolving an API key: FromContext and Actor return it
+// and the actor cell (see WithActorRef) is filled so request logging sees the
+// name. Other authenticators (the Squawk-verified public connector) use this
+// so everything downstream — MCP tools, activity actors — is unchanged.
+func WithIdentity(ctx context.Context, id Identity) context.Context {
+	setActorRef(ctx, id.Name)
+	return context.WithValue(ctx, ctxKey{}, id)
+}
+
+// Middleware authenticates the request by API key and enforces that the key
+// holds requiredScope. On success the Identity is added to the request
+// context. The credential is the X-API-Key header (agents, the SPA) or the
+// ?api_key= fallback for EventSource. This is the private (Tailscale) surface
+// only; the public hostname never accepts raw keys (see internal/public).
 func Middleware(st *store.Store, requiredScope string) func(http.Handler) http.Handler {
-	return middleware(st, requiredScope, true, "")
-}
-
-// PublicMiddleware is the posture for the internet-facing hostname: bearer
-// tokens only. A raw API key must never be usable from the public side, so a
-// leaked key cannot be replayed through the tunnel. The 401 advertises the
-// protected-resource metadata so MCP clients can discover the authorization
-// server (RFC 9728 / MCP authorization spec).
-func PublicMiddleware(st *store.Store, requiredScope, resourceMetadataURL string) func(http.Handler) http.Handler {
-	return middleware(st, requiredScope, false, resourceMetadataURL)
-}
-
-func middleware(st *store.Store, requiredScope string, allowAPIKey bool, resourceMetadataURL string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if resourceMetadataURL != "" {
-				w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+resourceMetadataURL+`"`)
-			}
-			id, status, msg := authenticate(r, st, allowAPIKey)
+			id, status, msg := authenticate(r, st)
 			if status != 0 {
 				writeAuthError(w, status, msg)
 				return
@@ -138,24 +130,14 @@ func middleware(st *store.Store, requiredScope string, allowAPIKey bool, resourc
 				forbidden(w, "key lacks scope: "+requiredScope)
 				return
 			}
-			// Success: the challenge header only belongs on rejections.
-			w.Header().Del("WWW-Authenticate")
-			setActorRef(r.Context(), id.Name)
-			ctx := context.WithValue(r.Context(), ctxKey{}, id)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			next.ServeHTTP(w, r.WithContext(WithIdentity(r.Context(), id)))
 		})
 	}
 }
 
-// authenticate resolves the request's credential. A non-zero status is the
-// HTTP error to answer with.
-func authenticate(r *http.Request, st *store.Store, allowAPIKey bool) (Identity, int, string) {
-	if tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
-		return bearerIdentity(r, st, strings.TrimSpace(tok))
-	}
-	if !allowAPIKey {
-		return Identity{}, http.StatusUnauthorized, "missing bearer token"
-	}
+// authenticate resolves the request's API key. A non-zero status is the HTTP
+// error to answer with.
+func authenticate(r *http.Request, st *store.Store) (Identity, int, string) {
 	raw := r.Header.Get("X-API-Key")
 	if raw == "" {
 		// Fallback for browser EventSource, which can't set request
@@ -180,30 +162,6 @@ func authenticate(r *http.Request, st *store.Store, allowAPIKey bool) (Identity,
 		_ = st.TouchAPIKey(r.Context(), key.ID)
 	}
 	return Identity{Name: key.Name, Scopes: key.Scopes}, 0, ""
-}
-
-func bearerIdentity(r *http.Request, st *store.Store, tok string) (Identity, int, string) {
-	if tok == "" {
-		return Identity{}, http.StatusUnauthorized, "missing bearer token"
-	}
-	row, err := st.GetOAuthTokenByAccessHash(r.Context(), HashKey(tok))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Identity{}, http.StatusUnauthorized, "invalid or expired token"
-		}
-		return Identity{}, http.StatusInternalServerError, "auth lookup failed"
-	}
-	if row.LastUsedAt == nil || time.Since(*row.LastUsedAt) > time.Minute {
-		_ = st.TouchOAuthToken(r.Context(), row.ID)
-	}
-	// The token acts as the key it was minted from: same actor name on
-	// activity, same revocation. Scopes are what the grant narrowed the key
-	// to (a client may ask for less than the key holds).
-	scopes := strings.Fields(row.Scope)
-	if len(scopes) == 0 {
-		scopes = row.KeyScopes
-	}
-	return Identity{Name: row.KeyName, Scopes: scopes}, 0, ""
 }
 
 func forbidden(w http.ResponseWriter, msg string) {

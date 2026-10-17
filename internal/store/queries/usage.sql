@@ -18,8 +18,8 @@ GROUP BY tool
 ORDER BY calls DESC;
 
 -- name: ActorStats :many
--- Per-actor behavior over a window. actor is the API key name (OAuth tokens
--- inherit it), so this is per-client/per-device usage: how much each caller
+-- Per-actor behavior over a window. actor is the API key name (or
+-- "claude-connector" for the public connector), so this is per-client usage: how much each caller
 -- does, how often it orients before writing, what it searches, and whether
 -- it errs. orient_calls counts the read-side entry points agents are meant
 -- to start from.
