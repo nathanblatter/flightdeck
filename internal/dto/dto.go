@@ -426,8 +426,9 @@ type UsageReport struct {
 	UnusedTools []string       `json:"unused_tools,omitempty"`
 	TopProjects []ProjectCalls `json:"top_projects,omitempty"`
 	// Actors breaks the window down by caller. The actor is the API key's
-	// name (OAuth tokens carry the name of the key they were minted from), so
-	// one key per client or device gives per-device usage for free.
+	// name (the Squawk-authenticated public connector reports as
+	// "claude-connector"), so one key per client or device gives per-device
+	// usage for free.
 	Actors       []ActorUsage `json:"actors,omitempty"`
 	Daily        []DayCalls   `json:"daily,omitempty"`
 	RecentErrors []ToolError  `json:"recent_errors,omitempty"`

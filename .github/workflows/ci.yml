@@ -44,6 +44,9 @@ jobs:
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.6
+          # Build the linter with the job's Go (from go.mod) instead of the
+          # prebuilt go1.25 binary, which refuses a go 1.26 module.
+          install-mode: goinstall
 
   web:
     name: Web

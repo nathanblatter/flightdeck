@@ -21,7 +21,7 @@ import (
 	"flightdeck/internal/blob"
 	mcpserver "flightdeck/internal/mcp"
 	"flightdeck/internal/metrics"
-	"flightdeck/internal/oauth"
+	"flightdeck/internal/public"
 	"flightdeck/internal/service"
 	"flightdeck/internal/store"
 	syncengine "flightdeck/internal/sync"
@@ -31,6 +31,9 @@ import (
 
 // Version is the build version, overridable via -ldflags "-X main.Version=...".
 var Version = "dev"
+
+// defaultAuthIssuer is the Squawk origin used when FLIGHTDECK_AUTH_ISSUER is unset.
+const defaultAuthIssuer = "https://squawk.nathanblatter.com"
 
 func main() {
 	if len(os.Args) > 1 {
@@ -177,16 +180,29 @@ func runServe() {
 	// Public connector surface (claude.ai / Claude mobile). Enabled by
 	// FLIGHTDECK_PUBLIC_URL, the https origin a tunnel forwards to this
 	// process. Requests arriving under that hostname see a separate, minimal
-	// mux: OAuth + discovery + a bearer-only /mcp. The UI, /api, /metrics and
+	// mux: the RFC 9728 protected-resource document and a token-only /mcp.
+	// Squawk (FLIGHTDECK_AUTH_ISSUER) is the authorization server; tokens must
+	// be addressed to FLIGHTDECK_AUTH_SERVICE_ID. The UI, /api, /metrics and
 	// raw API keys never exist on the public side, whatever the tunnel routes.
 	var handler http.Handler = mux
 	if pub := os.Getenv("FLIGHTDECK_PUBLIC_URL"); pub != "" {
-		publicMux, host, err := oauth.PublicHandler(st, pub, mcpserver.NewPublicHandler(st, svc, Version, upd))
-		if err != nil {
-			log.Fatalf("FLIGHTDECK_PUBLIC_URL: %v", err)
+		cfg := public.Config{
+			PublicURL: pub,
+			Issuer:    os.Getenv("FLIGHTDECK_AUTH_ISSUER"),
+			ServiceID: os.Getenv("FLIGHTDECK_AUTH_SERVICE_ID"),
 		}
-		log.Printf("public connector enabled for %s (OAuth + /mcp only)", host)
-		handler = oauth.SplitByHost(host, publicMux, mux)
+		if cfg.Issuer == "" {
+			cfg.Issuer = defaultAuthIssuer
+		}
+		if cfg.ServiceID == "" {
+			log.Fatalf("FLIGHTDECK_PUBLIC_URL is set but FLIGHTDECK_AUTH_SERVICE_ID is empty: set it to flightdeck's service id in the Squawk console (%s)", cfg.Issuer)
+		}
+		publicMux, host, err := public.Handler(cfg, mcpserver.NewPublicHandler(st, svc, Version, upd))
+		if err != nil {
+			log.Fatalf("public connector: %v", err)
+		}
+		log.Printf("public connector enabled for %s (protected resource of %s, service %s; /mcp only)", host, cfg.Issuer, cfg.ServiceID)
+		handler = public.SplitByHost(host, publicMux, mux)
 	}
 
 	srv := &http.Server{

@@ -19,7 +19,7 @@ docker compose up -d --build flightdeck
 ```
 
 - **UI / API / MCP:** http://100.79.61.79:4300 (Tailscale)
-- **Public connector (OAuth + MCP only):** https://flightdeck.nathanblatter.com
+- **Public connector (Squawk-authenticated MCP only):** https://flightdeck.nathanblatter.com
 - Health: `GET /healthz` (unauthenticated)
 - Migrations run automatically on startup (goose, embedded).
 
@@ -93,28 +93,44 @@ Tools — orient: `list_projects`, `get_project_context`, `get_global_context`,
 
 The claude.ai "Connectors" dialog, which is also how the phone app gets MCP
 servers, needs a public https URL and only speaks OAuth, so the Tailscale
-address and `X-API-Key` cannot be used there. Setting `FLIGHTDECK_PUBLIC_URL`
-turns on an OAuth 2.1 authorization server inside the binary and a second,
-minimal surface served only under that hostname:
+address and `X-API-Key` cannot be used there. The connector authenticates
+through **Squawk** (https://squawk.nathanblatter.com), Nathan's auth service:
+Squawk is the OAuth authorization server, and flightdeck is a plain RFC 9728
+protected resource that verifies Squawk's ES256 tokens against its JWKS.
+Nothing about clients, logins or tokens lives in flightdeck.
 
-- `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource[/mcp]` — discovery
-- `POST /oauth/register` — dynamic client registration (RFC 7591); Claude registers itself
-- `GET|POST /oauth/authorize` — the login page; the credential is an existing API key
-- `POST /oauth/token` — authorization code + PKCE S256, refresh with rotation
-- `/mcp` — bearer tokens only; a raw API key is refused on the public hostname
+Setting `FLIGHTDECK_PUBLIC_URL` (the https origin the tunnel forwards) turns
+on a second, minimal surface served only under that hostname:
+
+- `GET /.well-known/oauth-protected-resource/mcp` — the protected-resource
+  document naming Squawk as the authorization server and `read`/`write` as
+  the supported scopes
+- `/mcp` — Squawk bearer tokens only (audience = flightdeck's service id,
+  `write` scope required); a raw API key is refused on the public hostname.
+  A missing or invalid token gets a 401 whose `WWW-Authenticate` carries the
+  `resource_metadata` hint, so the client discovers Squawk on its own.
 
 Everything else (the UI, `/api`, `/metrics`, `/healthz`) answers 404 on the
-public hostname, so what the tunnel forwards does not matter. Tokens are
-opaque, stored hashed, and resolve to the API key they were minted from:
-same actor name on activity, same scopes, and revoking the key kills every
-token. Access tokens live an hour, refresh tokens thirty days.
+public hostname, so what the tunnel forwards does not matter. Every call
+through the connector runs as the actor `claude-connector` with the token's
+scopes, so activity and usage telemetry attribute to it like any API key.
+
+Environment:
+
+- `FLIGHTDECK_PUBLIC_URL` — enables the public surface (e.g. `https://flightdeck.nathanblatter.com`)
+- `FLIGHTDECK_AUTH_ISSUER` — Squawk origin; defaults to `https://squawk.nathanblatter.com`
+- `FLIGHTDECK_AUTH_SERVICE_ID` — flightdeck's service id in the Squawk console;
+  required when the public URL is set (the binary refuses to start without it)
 
 Deployment here is a `cloudflared` sidecar (`flightdeck-tunnel` in
 `~/docker-services/docker-compose.yml`, token in the untracked `.env`) that
-forwards `flightdeck.nathanblatter.com` to the container. To add it: Settings →
-Connectors → Add custom connector → `https://flightdeck.nathanblatter.com/mcp`,
-then paste a write-scoped key on the login page. The connector then appears
-on web, desktop and mobile.
+forwards `flightdeck.nathanblatter.com` to the container. The resource URL
+`https://flightdeck.nathanblatter.com/mcp` is registered on the flightdeck
+service in the Squawk console. To add it: Settings → Connectors → Add custom
+connector → `https://flightdeck.nathanblatter.com/mcp`. Claude reads the
+metadata, registers itself at Squawk, and the connector is approved once in
+the Squawk console (passkey); tokens then flow and the connector appears on
+web, desktop and mobile.
 
 Purging an archived project is deliberately *not* an MCP tool — archiving is
 reversible so agents may do it, but destroying history is a human decision and
@@ -183,8 +199,9 @@ reports are available through `GET /api/context-impact`.
 
 The usage report (`GET /api/usage?days=`, MCP `usage_report`) also carries an
 `actors` block: per-caller calls, errors, orient vs write counts, searches,
-latency, and top tools. The actor is the API key's name, and OAuth tokens
-inherit it, so one key per client or device gives per-device telemetry.
+latency, and top tools. The actor is the API key's name (the public connector
+reports as `claude-connector`), so one key per client or device gives
+per-device telemetry.
 
 The existing REST and MCP usage report includes a `context_effectiveness`
 section with contribution, prevented-error, duplicate-work-avoidance, harm,
