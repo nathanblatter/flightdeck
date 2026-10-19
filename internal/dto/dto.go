@@ -252,6 +252,22 @@ func ToSemanticItemsTrunc(rows []store.SearchItemsSemanticRow, maxBody int) []It
 	return out
 }
 
+// ToAnyItemsTrunc converts any-term (coverage-floored OR) FTS rows into Item
+// DTOs, preserving coverage-then-rank order.
+func ToAnyItemsTrunc(rows []store.SearchItemsAnyRow, maxBody int) []Item {
+	out := make([]Item, len(rows))
+	for i, r := range rows {
+		out[i] = ToItemTrunc(store.Item{
+			ID: r.ID, Ref: r.Ref, ProjectID: r.ProjectID, Type: r.Type, Title: r.Title, Body: r.Body,
+			Status: r.Status, Priority: r.Priority, Assignee: r.Assignee, Position: r.Position,
+			Source: r.Source, ExternalRef: r.ExternalRef, Tags: r.Tags, Metadata: r.Metadata,
+			CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, ClosedAt: r.ClosedAt, Version: r.Version,
+			AcceptanceCriteria: r.AcceptanceCriteria,
+		}, maxBody)
+	}
+	return out
+}
+
 // ToFuzzyItemsTrunc converts trigram fuzzy-search rows into Item DTOs.
 func ToFuzzyItemsTrunc(rows []store.SearchItemsFuzzyRow, maxBody int) []Item {
 	out := make([]Item, len(rows))
@@ -535,8 +551,11 @@ type SessionUsage struct {
 // SearchUsage reports search quality: zero-result queries are recall gaps;
 // rescues count searches where a fallback tier saved a lexical miss.
 type SearchUsage struct {
-	Searches          int      `json:"searches"`
-	ZeroResult        int      `json:"zero_result"`
+	Searches   int `json:"searches"`
+	ZeroResult int `json:"zero_result"`
+	// FtsAnyRescues: AND-FTS found nothing but the coverage-floored any-term
+	// tier did — the multi-word natural-language queries it exists for.
+	FtsAnyRescues     int      `json:"fts_any_rescues"`
 	SemanticRescues   int      `json:"semantic_rescues"`
 	TrigramRescues    int      `json:"trigram_rescues"`
 	AvgReturned       float64  `json:"avg_returned"`

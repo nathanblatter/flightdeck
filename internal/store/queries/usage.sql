@@ -107,19 +107,30 @@ LIMIT 10;
 DELETE FROM tool_calls WHERE called_at < $1;
 
 -- name: InsertSearchLog :exec
-INSERT INTO search_log (actor, query, fts_hits, semantic_hits, trigram_hits, activity_hits, returned, session_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
+INSERT INTO search_log (actor, query, fts_hits, semantic_hits, trigram_hits, activity_hits, returned, session_id,
+                        fts_any_hits, best_semantic_distance)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, sqlc.narg('best_semantic_distance')::float8);
 
 -- name: SearchUsageSummary :one
 -- semantic_rescues / trigram_rescues: searches where lexical FTS found nothing
 -- but a fallback tier did — direct evidence those tiers earn their keep.
 SELECT count(*)                                                                          AS searches,
        count(*) FILTER (WHERE returned = 0 AND activity_hits = 0)                        AS zero_result,
+       count(*) FILTER (WHERE fts_hits = 0 AND fts_any_hits > 0)                         AS fts_any_rescues,
        count(*) FILTER (WHERE fts_hits = 0 AND semantic_hits > 0)                        AS semantic_rescues,
        count(*) FILTER (WHERE fts_hits = 0 AND semantic_hits = 0 AND trigram_hits > 0)   AS trigram_rescues,
        COALESCE(avg(returned), 0)::float8                                                AS avg_returned
 FROM search_log
 WHERE searched_at >= $1;
+
+-- name: RecentSearchLog :many
+-- Raw search log for a window, oldest first — the replay set for
+-- `flightdeck search-eval`.
+SELECT id, searched_at, actor, query, fts_hits, fts_any_hits, semantic_hits, trigram_hits, activity_hits, returned,
+       best_semantic_distance
+FROM search_log
+WHERE searched_at >= $1
+ORDER BY searched_at;
 
 -- name: RecentZeroResultSearches :many
 SELECT query, searched_at

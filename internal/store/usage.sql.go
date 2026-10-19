@@ -156,19 +156,22 @@ func (q *Queries) EmbeddingCoverage(ctx context.Context) (EmbeddingCoverageRow, 
 }
 
 const insertSearchLog = `-- name: InsertSearchLog :exec
-INSERT INTO search_log (actor, query, fts_hits, semantic_hits, trigram_hits, activity_hits, returned, session_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO search_log (actor, query, fts_hits, semantic_hits, trigram_hits, activity_hits, returned, session_id,
+                        fts_any_hits, best_semantic_distance)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::float8)
 `
 
 type InsertSearchLogParams struct {
-	Actor        string `json:"actor"`
-	Query        string `json:"query"`
-	FtsHits      int32  `json:"fts_hits"`
-	SemanticHits int32  `json:"semantic_hits"`
-	TrigramHits  int32  `json:"trigram_hits"`
-	ActivityHits int32  `json:"activity_hits"`
-	Returned     int32  `json:"returned"`
-	SessionID    string `json:"session_id"`
+	Actor                string   `json:"actor"`
+	Query                string   `json:"query"`
+	FtsHits              int32    `json:"fts_hits"`
+	SemanticHits         int32    `json:"semantic_hits"`
+	TrigramHits          int32    `json:"trigram_hits"`
+	ActivityHits         int32    `json:"activity_hits"`
+	Returned             int32    `json:"returned"`
+	SessionID            string   `json:"session_id"`
+	FtsAnyHits           int32    `json:"fts_any_hits"`
+	BestSemanticDistance *float64 `json:"best_semantic_distance"`
 }
 
 func (q *Queries) InsertSearchLog(ctx context.Context, arg InsertSearchLogParams) error {
@@ -181,6 +184,8 @@ func (q *Queries) InsertSearchLog(ctx context.Context, arg InsertSearchLogParams
 		arg.ActivityHits,
 		arg.Returned,
 		arg.SessionID,
+		arg.FtsAnyHits,
+		arg.BestSemanticDistance,
 	)
 	return err
 }
@@ -239,6 +244,62 @@ func (q *Queries) PurgeOldToolCalls(ctx context.Context, calledAt time.Time) (in
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const recentSearchLog = `-- name: RecentSearchLog :many
+SELECT id, searched_at, actor, query, fts_hits, fts_any_hits, semantic_hits, trigram_hits, activity_hits, returned,
+       best_semantic_distance
+FROM search_log
+WHERE searched_at >= $1
+ORDER BY searched_at
+`
+
+type RecentSearchLogRow struct {
+	ID                   int64     `json:"id"`
+	SearchedAt           time.Time `json:"searched_at"`
+	Actor                string    `json:"actor"`
+	Query                string    `json:"query"`
+	FtsHits              int32     `json:"fts_hits"`
+	FtsAnyHits           int32     `json:"fts_any_hits"`
+	SemanticHits         int32     `json:"semantic_hits"`
+	TrigramHits          int32     `json:"trigram_hits"`
+	ActivityHits         int32     `json:"activity_hits"`
+	Returned             int32     `json:"returned"`
+	BestSemanticDistance *float64  `json:"best_semantic_distance"`
+}
+
+// Raw search log for a window, oldest first — the replay set for
+// `flightdeck search-eval`.
+func (q *Queries) RecentSearchLog(ctx context.Context, searchedAt time.Time) ([]RecentSearchLogRow, error) {
+	rows, err := q.db.Query(ctx, recentSearchLog, searchedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RecentSearchLogRow
+	for rows.Next() {
+		var i RecentSearchLogRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SearchedAt,
+			&i.Actor,
+			&i.Query,
+			&i.FtsHits,
+			&i.FtsAnyHits,
+			&i.SemanticHits,
+			&i.TrigramHits,
+			&i.ActivityHits,
+			&i.Returned,
+			&i.BestSemanticDistance,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const recentToolErrors = `-- name: RecentToolErrors :many
@@ -311,6 +372,7 @@ func (q *Queries) RecentZeroResultSearches(ctx context.Context, searchedAt time.
 const searchUsageSummary = `-- name: SearchUsageSummary :one
 SELECT count(*)                                                                          AS searches,
        count(*) FILTER (WHERE returned = 0 AND activity_hits = 0)                        AS zero_result,
+       count(*) FILTER (WHERE fts_hits = 0 AND fts_any_hits > 0)                         AS fts_any_rescues,
        count(*) FILTER (WHERE fts_hits = 0 AND semantic_hits > 0)                        AS semantic_rescues,
        count(*) FILTER (WHERE fts_hits = 0 AND semantic_hits = 0 AND trigram_hits > 0)   AS trigram_rescues,
        COALESCE(avg(returned), 0)::float8                                                AS avg_returned
@@ -321,6 +383,7 @@ WHERE searched_at >= $1
 type SearchUsageSummaryRow struct {
 	Searches        int64   `json:"searches"`
 	ZeroResult      int64   `json:"zero_result"`
+	FtsAnyRescues   int64   `json:"fts_any_rescues"`
 	SemanticRescues int64   `json:"semantic_rescues"`
 	TrigramRescues  int64   `json:"trigram_rescues"`
 	AvgReturned     float64 `json:"avg_returned"`
@@ -334,6 +397,7 @@ func (q *Queries) SearchUsageSummary(ctx context.Context, searchedAt time.Time) 
 	err := row.Scan(
 		&i.Searches,
 		&i.ZeroResult,
+		&i.FtsAnyRescues,
 		&i.SemanticRescues,
 		&i.TrigramRescues,
 		&i.AvgReturned,

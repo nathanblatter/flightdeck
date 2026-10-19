@@ -67,16 +67,18 @@ func (s *Service) RecordToolCall(ctx context.Context, c ToolCall) {
 }
 
 // logSearch persists one search's per-tier hit counts (best-effort).
-func (s *Service) logSearch(ctx context.Context, actor, query string, ftsN, semN, triN, actN, returned int) {
+func (s *Service) logSearch(ctx context.Context, actor, query string, tiers tierHits, actN, returned int) {
 	err := s.St.InsertSearchLog(context.WithoutCancel(ctx), store.InsertSearchLogParams{
-		Actor:        actor,
-		Query:        query,
-		FtsHits:      int32(ftsN),
-		SemanticHits: int32(semN),
-		TrigramHits:  int32(triN),
-		ActivityHits: int32(actN),
-		Returned:     int32(returned),
-		SessionID:    SessionID(ctx),
+		Actor:                actor,
+		Query:                query,
+		FtsHits:              int32(tiers.fts),
+		FtsAnyHits:           int32(tiers.ftsAny),
+		SemanticHits:         int32(tiers.semantic),
+		TrigramHits:          int32(tiers.trigram),
+		ActivityHits:         int32(actN),
+		Returned:             int32(returned),
+		SessionID:            SessionID(ctx),
+		BestSemanticDistance: tiers.bestSemantic,
 	})
 	if err != nil {
 		log.Printf("usage: record search: %v", err)
@@ -184,6 +186,7 @@ func (s *Service) UsageReport(ctx context.Context, days int, knownTools []string
 	rep.Search = dto.SearchUsage{
 		Searches:        int(search.Searches),
 		ZeroResult:      int(search.ZeroResult),
+		FtsAnyRescues:   int(search.FtsAnyRescues),
 		SemanticRescues: int(search.SemanticRescues),
 		TrigramRescues:  int(search.TrigramRescues),
 		AvgReturned:     search.AvgReturned,
