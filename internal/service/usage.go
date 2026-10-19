@@ -178,6 +178,7 @@ func (s *Service) UsageReport(ctx context.Context, days int, knownTools []string
 		WroteWithoutOrient: int(sessions.WroteWithoutOrient),
 		ImpactReported:     int(sessions.ImpactReported),
 		OrientRate:         contextImpactRate(int(sessions.Oriented), int(sessions.Sessions)),
+		ImpactCoverage:     contextImpactRate(int(sessions.ImpactReported), int(sessions.Oriented)),
 		AvgCalls:           sessions.AvgCalls,
 	}
 	for _, e := range errsRows {

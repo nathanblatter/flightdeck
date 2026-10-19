@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,6 +36,44 @@ type handlers struct {
 	// toolNames is every registered tool, collected by addTool so usage_report
 	// can flag registered-but-never-called tools.
 	toolNames []string
+	// nudged remembers which MCP sessions have already received the
+	// record_context_impact nudge (session id → struct{}), so it rides on
+	// exactly one write per session. Reset wholesale past nudgedMax entries:
+	// a repeat nudge on a very old session is harmless.
+	nudged  sync.Map
+	nudgedN atomic.Int64
+}
+
+const nudgedMax = 10000
+
+// impactNudge is appended as a second content block to the first successful
+// write of each MCP session. One sentence: the agent is mid-task and has
+// already paid for the write it asked for.
+const impactNudge = "flightdeck: before this session ends, call record_context_impact once (effect helpful|neutral|harmful; neutral is a valid answer; session_id defaults to this session)."
+
+// writeTools are the tools whose first successful call in a session carries
+// the impact nudge — the same set usage_report counts as writes.
+var writeTools = map[string]bool{
+	"create_item": true, "create_items": true, "update_item": true, "complete_item": true,
+	"log_activity": true, "update_project_summary": true, "set_project_instructions": true,
+	"create_project": true, "archive_project": true, "link_items": true, "unlink_items": true,
+	"add_item_ref": true,
+}
+
+// nudgeOnce reports whether this is the first write on the session and marks
+// it. Sessionless (REST-style) calls are never nudged.
+func (h *handlers) nudgeOnce(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	if _, loaded := h.nudged.LoadOrStore(sessionID, struct{}{}); loaded {
+		return false
+	}
+	if h.nudgedN.Add(1) > nudgedMax {
+		h.nudged.Range(func(k, _ any) bool { h.nudged.Delete(k); return true })
+		h.nudgedN.Store(0)
+	}
+	return true
 }
 
 // addTool registers a tool and records its name in h.toolNames.
@@ -55,7 +95,11 @@ func addTool[In, Out any](h *handlers, s *mcpsdk.Server, t *mcpsdk.Tool, fn func
 		if err != nil {
 			return nil, nil, err
 		}
-		return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: string(b)}}}, nil, nil
+		content := []mcpsdk.Content{&mcpsdk.TextContent{Text: string(b)}}
+		if writeTools[t.Name] && h.nudgeOnce(service.SessionID(ctx)) {
+			content = append(content, &mcpsdk.TextContent{Text: impactNudge})
+		}
+		return &mcpsdk.CallToolResult{Content: content}, nil, nil
 	})
 	h.toolNames = append(h.toolNames, t.Name)
 }
@@ -65,10 +109,10 @@ func addTool[In, Out any](h *handlers, s *mcpsdk.Server, t *mcpsdk.Tool, fn func
 // learns the orient → work → log loop that keeps the store fresh. Kept under
 // 600 characters: it rides on every session start.
 const Instructions = "Flightdeck is the shared memory for projects: what each one is, what's open, what was decided and why. " +
-	"Start by orienting: get_project_context(slug) for the project you're working in (get_global_context for a cross-project view, list_projects to find a slug). " +
-	"As you work, keep it fresh: create_item for new tasks/bugs/ideas, update_item to move status, log_activity for decisions and progress — always capture the why. " +
-	"Use search before filing something that may already exist. " +
-	"Before you finish, record_context_impact: did the context you read help, hurt, or make no difference?"
+	"Orient first: get_project_context(slug) for the project you're in (get_global_context across projects, list_projects to find a slug). " +
+	"Keep it fresh as you work: create_item for new tasks/bugs/ideas, update_item to move status, log_activity for decisions and progress — capture the why. " +
+	"Search before filing what may exist. " +
+	"Before you finish, call record_context_impact once: did the context help, hurt, or make no difference? neutral is a valid answer; session_id defaults to this session."
 
 // NewHandler builds the MCP server, registers all tools, and returns an
 // http.Handler serving the streamable-HTTP transport (mount it at /mcp).
@@ -315,7 +359,7 @@ type logActivityIn struct {
 }
 
 type recordContextImpactIn struct {
-	SessionID             string   `json:"session_id" jsonschema:"caller-generated identifier shared by impact events from one work session"`
+	SessionID             *string  `json:"session_id,omitempty" jsonschema:"work-session identifier; omit to use this MCP session's id (the default)"`
 	Project               string   `json:"project" jsonschema:"existing project slug"`
 	Item                  *string  `json:"item,omitempty" jsonschema:"optional item UUID or short ref belonging to the project"`
 	Effect                string   `json:"effect" jsonschema:"helpful|neutral|harmful"`
@@ -453,7 +497,7 @@ func (h *handlers) register(s *mcpsdk.Server) {
 
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "record_context_impact",
-		Description: "Record an agent-reported helpful, ignored, or harmful context outcome. This is evidence for usefulness analytics, not causal proof.",
+		Description: "Once per work session, before you finish: did the Flightdeck context you read help, hurt, or make no difference? neutral/ignored is a valid answer. session_id defaults to this MCP session. Evidence for usefulness analytics, not causal proof.",
 	}, h.recordContextImpact)
 
 	addTool(h, s, &mcpsdk.Tool{
@@ -805,8 +849,15 @@ func (h *handlers) recordContextImpact(ctx context.Context, _ *mcpsdk.CallToolRe
 	if !ok || identity.Name == "" {
 		return dto.ContextImpactEvent{}, fmt.Errorf("%w: authenticated actor is required", service.ErrInvalidContextImpact)
 	}
+	sessionID := service.SessionID(ctx)
+	if in.SessionID != nil && *in.SessionID != "" {
+		sessionID = *in.SessionID
+	}
+	if sessionID == "" {
+		return dto.ContextImpactEvent{}, fmt.Errorf("%w: session_id is required when the transport has no session", service.ErrInvalidContextImpact)
+	}
 	event, _, err := h.svc.RecordContextImpact(ctx, service.ContextImpactInput{
-		SessionID: in.SessionID, Project: in.Project, Item: in.Item,
+		SessionID: sessionID, Project: in.Project, Item: in.Item,
 		Effect: in.Effect, Mechanism: in.Mechanism, ContextRefs: in.ContextRefs,
 		Evidence: in.Evidence, EstimatedMinutesDelta: in.EstimatedMinutesDelta,
 		IdempotencyKey: in.IdempotencyKey,
