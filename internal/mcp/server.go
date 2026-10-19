@@ -221,10 +221,14 @@ func verbosityOf(p *string) service.Verbosity {
 // --- tool I/O types ---
 
 type listProjectsIn struct {
-	Status *string `json:"status,omitempty" jsonschema:"filter by status: active|paused|done|archived"`
+	Status    *string `json:"status,omitempty" jsonschema:"filter by status: active|paused|done|archived"`
+	Verbosity *string `json:"verbosity,omitempty" jsonschema:"compact (default: slug, name, status, parent, aliases, first summary sentence) | full (every field incl. instructions)"`
 }
 type projectsOut struct {
 	Projects []dto.Project `json:"projects"`
+}
+type projectBriefsOut struct {
+	Projects []dto.ProjectBrief `json:"projects"`
 }
 
 type slugIn struct {
@@ -399,7 +403,7 @@ type usageReportIn struct {
 func (h *handlers) register(s *mcpsdk.Server) {
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "list_projects",
-		Description: "List projects, optionally filtered by status.",
+		Description: "List projects (slug, name, status, parent, first summary sentence), optionally filtered by status. To map your cwd or git remote to a slug use resolve_project; for a project's full summary and instructions use get_project_context. verbosity=full returns every field.",
 	}, h.listProjects)
 
 	addTool(h, s, &mcpsdk.Tool{
@@ -523,12 +527,19 @@ func (h *handlers) register(s *mcpsdk.Server) {
 
 // --- tool implementations ---
 
-func (h *handlers) listProjects(ctx context.Context, _ *mcpsdk.CallToolRequest, in listProjectsIn) (projectsOut, error) {
+// listProjects is compact by default: agents call it to find a slug, and the
+// full shape (instructions + summary for every project) ran to ~90 KB per
+// call — paid in tokens on every lookup. REST /api/projects is unchanged;
+// the UI wants the full rows.
+func (h *handlers) listProjects(ctx context.Context, _ *mcpsdk.CallToolRequest, in listProjectsIn) (any, error) {
 	projects, err := h.st.ListProjects(ctx, optStr(in.Status))
 	if err != nil {
-		return projectsOut{}, err
+		return nil, err
 	}
-	return projectsOut{Projects: dto.ToProjects(projects)}, nil
+	if verbosityOf(in.Verbosity) == service.VerbosityFull {
+		return projectsOut{Projects: dto.ToProjects(projects)}, nil
+	}
+	return projectBriefsOut{Projects: dto.ToProjectListBriefs(projects)}, nil
 }
 
 func (h *handlers) getProjectContext(ctx context.Context, _ *mcpsdk.CallToolRequest, in slugIn) (dto.ProjectContext, error) {

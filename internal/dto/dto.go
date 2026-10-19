@@ -10,6 +10,7 @@ package dto
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -164,6 +165,43 @@ func trunc(s string, max int) string {
 		return s
 	}
 	return string(r[:max]) + "…"
+}
+
+// briefSummaryMax caps a ProjectBrief summary from list_projects: the first
+// sentence, enough to tell projects apart when picking a slug.
+const briefSummaryMax = 200
+
+// ToProjectListBriefs reduces full project rows to briefs for list_projects:
+// slug, name, status, parent, aliases, and the first summary sentence. No
+// instructions — get_project_context delivers those once the slug is known.
+func ToProjectListBriefs(ps []store.Project) []ProjectBrief {
+	out := make([]ProjectBrief, len(ps))
+	for i, p := range ps {
+		var aliases []string
+		if len(p.Aliases) > 0 {
+			aliases = p.Aliases
+		}
+		out[i] = ProjectBrief{
+			Slug: p.Slug, Name: p.Name, Status: p.Status, Parent: p.ParentSlug,
+			Aliases: aliases, Summary: trunc(firstSentence(p.Summary), briefSummaryMax),
+		}
+	}
+	return out
+}
+
+// firstSentence returns s up to and including its first sentence terminator
+// (". ", "! ", "? ", or a newline), or all of s when there is none.
+func firstSentence(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, "\n"); i >= 0 {
+		s = s[:i]
+	}
+	for i := 0; i+1 < len(s); i++ {
+		if (s[i] == '.' || s[i] == '!' || s[i] == '?') && s[i+1] == ' ' {
+			return s[:i+1]
+		}
+	}
+	return s
 }
 
 // ItemBrief is the lightest item shape — ref/title/status/priority — for "what's
@@ -341,13 +379,16 @@ type ProjectContext struct {
 	Children []ProjectBrief `json:"children,omitempty"`
 }
 
-// ProjectBrief is the slim tree-navigation view of a project (drawer chips,
-// child listings) — enough to decide whether to orient into it.
+// ProjectBrief is the slim view of a project — tree navigation (drawer chips,
+// child listings) and the compact list_projects — enough to decide whether to
+// orient into it. Parent and Aliases are set by list_projects only.
 type ProjectBrief struct {
-	Slug    string `json:"slug"`
-	Name    string `json:"name"`
-	Status  string `json:"status"`
-	Summary string `json:"summary,omitempty"`
+	Slug    string   `json:"slug"`
+	Name    string   `json:"name"`
+	Status  string   `json:"status"`
+	Parent  *string  `json:"parent,omitempty"`
+	Aliases []string `json:"aliases,omitempty"`
+	Summary string   `json:"summary,omitempty"`
 }
 
 func ToProjectBriefs(rows []store.ListChildProjectsRow) []ProjectBrief {
