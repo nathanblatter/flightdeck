@@ -172,6 +172,7 @@ type SearchLog struct {
 	TrigramHits  int32     `json:"trigram_hits"`
 	ActivityHits int32     `json:"activity_hits"`
 	Returned     int32     `json:"returned"`
+	SessionID    string    `json:"session_id"`
 }
 
 type Setting struct {
@@ -191,6 +192,7 @@ type ToolCall struct {
 	DurationMs  int32           `json:"duration_ms"`
 	Args        json.RawMessage `json:"args"`
 	ResultBytes int32           `json:"result_bytes"`
+	SessionID   string          `json:"session_id"`
 }
 
 type Webhook struct {

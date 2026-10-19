@@ -28,6 +28,9 @@ type ToolCall struct {
 	Duration    time.Duration
 	Args        json.RawMessage
 	ResultBytes int
+	// SessionID is the MCP session the call arrived on ('' for REST). Set
+	// from the ctx by RecordToolCall when empty.
+	SessionID string
 }
 
 // RecordToolCall persists one tool invocation. Best-effort: analytics must
@@ -44,6 +47,9 @@ func (s *Service) RecordToolCall(ctx context.Context, c ToolCall) {
 	if len(c.Err) > 500 {
 		c.Err = c.Err[:500]
 	}
+	if c.SessionID == "" {
+		c.SessionID = SessionID(ctx)
+	}
 	err := s.St.InsertToolCall(context.WithoutCancel(ctx), store.InsertToolCallParams{
 		Tool:        c.Tool,
 		Actor:       c.Actor,
@@ -53,6 +59,7 @@ func (s *Service) RecordToolCall(ctx context.Context, c ToolCall) {
 		DurationMs:  int32(c.Duration.Milliseconds()),
 		Args:        args,
 		ResultBytes: int32(c.ResultBytes),
+		SessionID:   c.SessionID,
 	})
 	if err != nil {
 		log.Printf("usage: record tool call: %v", err)
@@ -69,6 +76,7 @@ func (s *Service) logSearch(ctx context.Context, actor, query string, ftsN, semN
 		TrigramHits:  int32(triN),
 		ActivityHits: int32(actN),
 		Returned:     int32(returned),
+		SessionID:    SessionID(ctx),
 	})
 	if err != nil {
 		log.Printf("usage: record search: %v", err)
@@ -97,6 +105,7 @@ func (s *Service) UsageReport(ctx context.Context, days int, knownTools []string
 		zeroQs   []store.RecentZeroResultSearchesRow
 		coverage store.EmbeddingCoverageRow
 		impact   store.ContextEffectivenessSummaryRow
+		sessions store.SessionStatsRow
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) { stats, err = s.St.ToolCallStats(gctx, since); return })
@@ -108,6 +117,7 @@ func (s *Service) UsageReport(ctx context.Context, days int, knownTools []string
 	g.Go(func() (err error) { zeroQs, err = s.St.RecentZeroResultSearches(gctx, since); return })
 	g.Go(func() (err error) { coverage, err = s.St.EmbeddingCoverage(gctx); return })
 	g.Go(func() (err error) { impact, err = s.St.ContextEffectivenessSummary(gctx, since); return })
+	g.Go(func() (err error) { sessions, err = s.St.SessionStats(gctx, since); return })
 	if err := g.Wait(); err != nil {
 		return dto.UsageReport{}, err
 	}
@@ -159,6 +169,14 @@ func (s *Service) UsageReport(ctx context.Context, days int, knownTools []string
 			FirstUsed:   a.FirstUsed,
 			LastUsed:    a.LastUsed,
 		})
+	}
+	rep.Sessions = dto.SessionUsage{
+		Sessions:           int(sessions.Sessions),
+		Oriented:           int(sessions.Oriented),
+		WroteWithoutOrient: int(sessions.WroteWithoutOrient),
+		ImpactReported:     int(sessions.ImpactReported),
+		OrientRate:         contextImpactRate(int(sessions.Oriented), int(sessions.Sessions)),
+		AvgCalls:           sessions.AvgCalls,
 	}
 	for _, e := range errsRows {
 		rep.RecentErrors = append(rep.RecentErrors, dto.ToolError{Tool: e.Tool, Error: e.Error, At: e.CalledAt})

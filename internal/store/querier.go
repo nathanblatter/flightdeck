@@ -213,6 +213,14 @@ type Querier interface {
 	// semantic_rescues / trigram_rescues: searches where lexical FTS found nothing
 	// but a fallback tier did — direct evidence those tiers earn their keep.
 	SearchUsageSummary(ctx context.Context, searchedAt time.Time) (SearchUsageSummaryRow, error)
+	// Session-level behavior over a window, for MCP calls only (REST has no
+	// session and records ''). A session is "oriented" when an orient call
+	// (get_project_context / get_global_context) happens before — or without —
+	// any write; "wrote_without_orient" when its first write precedes any orient
+	// call. impact_reported counts sessions that called record_context_impact.
+	// list_projects / resolve_project are slug lookups, not orientation, so they
+	// do not count here even though ActorStats counts them as orient_calls.
+	SessionStats(ctx context.Context, calledAt time.Time) (SessionStatsRow, error)
 	// Store an embedding, but only if the item's content hasn't changed since it was
 	// read for embedding (guarded by the still-NULL check) — so an edit that races
 	// the embedder isn't clobbered with a stale vector.

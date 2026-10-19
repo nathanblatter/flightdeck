@@ -156,8 +156,8 @@ func (q *Queries) EmbeddingCoverage(ctx context.Context) (EmbeddingCoverageRow, 
 }
 
 const insertSearchLog = `-- name: InsertSearchLog :exec
-INSERT INTO search_log (actor, query, fts_hits, semantic_hits, trigram_hits, activity_hits, returned)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO search_log (actor, query, fts_hits, semantic_hits, trigram_hits, activity_hits, returned, session_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 `
 
 type InsertSearchLogParams struct {
@@ -168,6 +168,7 @@ type InsertSearchLogParams struct {
 	TrigramHits  int32  `json:"trigram_hits"`
 	ActivityHits int32  `json:"activity_hits"`
 	Returned     int32  `json:"returned"`
+	SessionID    string `json:"session_id"`
 }
 
 func (q *Queries) InsertSearchLog(ctx context.Context, arg InsertSearchLogParams) error {
@@ -179,13 +180,14 @@ func (q *Queries) InsertSearchLog(ctx context.Context, arg InsertSearchLogParams
 		arg.TrigramHits,
 		arg.ActivityHits,
 		arg.Returned,
+		arg.SessionID,
 	)
 	return err
 }
 
 const insertToolCall = `-- name: InsertToolCall :exec
-INSERT INTO tool_calls (tool, actor, project, ok, error, duration_ms, args, result_bytes)
-VALUES ($1, $2, $3, $4, $5, $6, COALESCE($8::jsonb, '{}'), $7)
+INSERT INTO tool_calls (tool, actor, project, ok, error, duration_ms, args, result_bytes, session_id)
+VALUES ($1, $2, $3, $4, $5, $6, COALESCE($9::jsonb, '{}'), $7, $8)
 `
 
 type InsertToolCallParams struct {
@@ -196,6 +198,7 @@ type InsertToolCallParams struct {
 	Error       string `json:"error"`
 	DurationMs  int32  `json:"duration_ms"`
 	ResultBytes int32  `json:"result_bytes"`
+	SessionID   string `json:"session_id"`
 	Args        []byte `json:"args"`
 }
 
@@ -208,6 +211,7 @@ func (q *Queries) InsertToolCall(ctx context.Context, arg InsertToolCallParams) 
 		arg.Error,
 		arg.DurationMs,
 		arg.ResultBytes,
+		arg.SessionID,
 		arg.Args,
 	)
 	return err
@@ -333,6 +337,63 @@ func (q *Queries) SearchUsageSummary(ctx context.Context, searchedAt time.Time) 
 		&i.SemanticRescues,
 		&i.TrigramRescues,
 		&i.AvgReturned,
+	)
+	return i, err
+}
+
+const sessionStats = `-- name: SessionStats :one
+WITH calls AS (
+    SELECT session_id, called_at,
+           tool IN ('get_project_context', 'get_global_context') AS is_orient,
+           tool IN ('create_item', 'create_items', 'update_item', 'complete_item', 'log_activity',
+                    'update_project_summary', 'set_project_instructions', 'create_project',
+                    'archive_project', 'link_items', 'unlink_items', 'add_item_ref') AS is_write,
+           tool = 'record_context_impact' AS is_impact
+    FROM tool_calls
+    WHERE called_at >= $1 AND session_id <> ''
+), per_session AS (
+    SELECT session_id,
+           min(called_at) FILTER (WHERE is_orient) AS first_orient,
+           min(called_at) FILTER (WHERE is_write)  AS first_write,
+           bool_or(is_impact)                      AS reported_impact,
+           count(*)                                AS calls
+    FROM calls
+    GROUP BY session_id
+)
+SELECT count(*)                                                                                   AS sessions,
+       count(*) FILTER (WHERE first_orient IS NOT NULL
+                          AND (first_write IS NULL OR first_orient <= first_write))               AS oriented,
+       count(*) FILTER (WHERE first_write IS NOT NULL
+                          AND (first_orient IS NULL OR first_orient > first_write))               AS wrote_without_orient,
+       count(*) FILTER (WHERE reported_impact)                                                    AS impact_reported,
+       COALESCE(avg(calls), 0)::float8                                                            AS avg_calls
+FROM per_session
+`
+
+type SessionStatsRow struct {
+	Sessions           int64   `json:"sessions"`
+	Oriented           int64   `json:"oriented"`
+	WroteWithoutOrient int64   `json:"wrote_without_orient"`
+	ImpactReported     int64   `json:"impact_reported"`
+	AvgCalls           float64 `json:"avg_calls"`
+}
+
+// Session-level behavior over a window, for MCP calls only (REST has no
+// session and records ”). A session is "oriented" when an orient call
+// (get_project_context / get_global_context) happens before — or without —
+// any write; "wrote_without_orient" when its first write precedes any orient
+// call. impact_reported counts sessions that called record_context_impact.
+// list_projects / resolve_project are slug lookups, not orientation, so they
+// do not count here even though ActorStats counts them as orient_calls.
+func (q *Queries) SessionStats(ctx context.Context, calledAt time.Time) (SessionStatsRow, error) {
+	row := q.db.QueryRow(ctx, sessionStats, calledAt)
+	var i SessionStatsRow
+	err := row.Scan(
+		&i.Sessions,
+		&i.Oriented,
+		&i.WroteWithoutOrient,
+		&i.ImpactReported,
+		&i.AvgCalls,
 	)
 	return i, err
 }
