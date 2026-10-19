@@ -60,6 +60,16 @@ func addTool[In, Out any](h *handlers, s *mcpsdk.Server, t *mcpsdk.Tool, fn func
 	h.toolNames = append(h.toolNames, t.Name)
 }
 
+// Instructions is the client-agnostic agent contract, sent in the initialize
+// response so every MCP client — not only one with a hand-written CLAUDE.md —
+// learns the orient → work → log loop that keeps the store fresh. Kept under
+// 600 characters: it rides on every session start.
+const Instructions = "Flightdeck is the shared memory for projects: what each one is, what's open, what was decided and why. " +
+	"Start by orienting: get_project_context(slug) for the project you're working in (get_global_context for a cross-project view, list_projects to find a slug). " +
+	"As you work, keep it fresh: create_item for new tasks/bugs/ideas, update_item to move status, log_activity for decisions and progress — always capture the why. " +
+	"Use search before filing something that may already exist. " +
+	"Before you finish, record_context_impact: did the context you read help, hurt, or make no difference?"
+
 // NewHandler builds the MCP server, registers all tools, and returns an
 // http.Handler serving the streamable-HTTP transport (mount it at /mcp).
 func NewHandler(st *store.Store, svc *service.Service, version string, upd *update.Checker) http.Handler {
@@ -81,7 +91,7 @@ func newHandler(st *store.Store, svc *service.Service, version string, upd *upda
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{
 		Name:    "flightdeck",
 		Version: version,
-	}, nil)
+	}, &mcpsdk.ServerOptions{Instructions: Instructions})
 	h.register(server)
 	server.AddReceivingMiddleware(metricsMiddleware)
 	server.AddReceivingMiddleware(h.usageMiddleware)
@@ -114,7 +124,12 @@ func (h *handlers) usageMiddleware(next mcpsdk.MethodHandler) mcpsdk.MethodHandl
 		if method != "tools/call" {
 			return next(ctx, method, req)
 		}
-		call := service.ToolCall{Tool: "unknown", Actor: auth.Actor(ctx)}
+		// Tag the ctx with the transport session so every telemetry row below
+		// (this call, any search it runs) can be grouped back into one session.
+		if ss, ok := req.GetSession().(*mcpsdk.ServerSession); ok {
+			ctx = service.WithSessionID(ctx, ss.ID())
+		}
+		call := service.ToolCall{Tool: "unknown", Actor: auth.Actor(ctx), SessionID: service.SessionID(ctx)}
 		if p, ok := req.GetParams().(*mcpsdk.CallToolParamsRaw); ok {
 			call.Tool = p.Name
 			call.Args = p.Arguments

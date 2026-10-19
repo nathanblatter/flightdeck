@@ -429,7 +429,10 @@ type UsageReport struct {
 	// name (the Squawk-authenticated public connector reports as
 	// "claude-connector"), so one key per client or device gives per-device
 	// usage for free.
-	Actors       []ActorUsage `json:"actors,omitempty"`
+	Actors []ActorUsage `json:"actors,omitempty"`
+	// Sessions classifies MCP sessions by whether they read context before
+	// writing — the measured (not inferred) orient rate.
+	Sessions     SessionUsage `json:"sessions"`
 	Daily        []DayCalls   `json:"daily,omitempty"`
 	RecentErrors []ToolError  `json:"recent_errors,omitempty"`
 	Search       SearchUsage  `json:"search"`
@@ -513,6 +516,20 @@ type ToolError struct {
 	Tool  string    `json:"tool"`
 	Error string    `json:"error"`
 	At    time.Time `json:"at"`
+}
+
+// SessionUsage groups MCP tool calls by transport session. Oriented sessions
+// called get_project_context / get_global_context before (or without) any
+// write; WroteWithoutOrient sessions wrote first. REST calls carry no session
+// and are excluded. ImpactReported counts sessions that called
+// record_context_impact.
+type SessionUsage struct {
+	Sessions           int     `json:"sessions"`
+	Oriented           int     `json:"oriented"`
+	WroteWithoutOrient int     `json:"wrote_without_orient"`
+	ImpactReported     int     `json:"impact_reported"`
+	OrientRate         float64 `json:"orient_rate"`
+	AvgCalls           float64 `json:"avg_calls"`
 }
 
 // SearchUsage reports search quality: zero-result queries are recall gaps;

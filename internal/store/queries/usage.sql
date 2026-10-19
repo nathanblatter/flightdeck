@@ -1,6 +1,41 @@
 -- name: InsertToolCall :exec
-INSERT INTO tool_calls (tool, actor, project, ok, error, duration_ms, args, result_bytes)
-VALUES ($1, $2, $3, $4, $5, $6, COALESCE(sqlc.narg('args')::jsonb, '{}'), $7);
+INSERT INTO tool_calls (tool, actor, project, ok, error, duration_ms, args, result_bytes, session_id)
+VALUES ($1, $2, $3, $4, $5, $6, COALESCE(sqlc.narg('args')::jsonb, '{}'), $7, $8);
+
+-- name: SessionStats :one
+-- Session-level behavior over a window, for MCP calls only (REST has no
+-- session and records ''). A session is "oriented" when an orient call
+-- (get_project_context / get_global_context) happens before — or without —
+-- any write; "wrote_without_orient" when its first write precedes any orient
+-- call. impact_reported counts sessions that called record_context_impact.
+-- list_projects / resolve_project are slug lookups, not orientation, so they
+-- do not count here even though ActorStats counts them as orient_calls.
+WITH calls AS (
+    SELECT session_id, called_at,
+           tool IN ('get_project_context', 'get_global_context') AS is_orient,
+           tool IN ('create_item', 'create_items', 'update_item', 'complete_item', 'log_activity',
+                    'update_project_summary', 'set_project_instructions', 'create_project',
+                    'archive_project', 'link_items', 'unlink_items', 'add_item_ref') AS is_write,
+           tool = 'record_context_impact' AS is_impact
+    FROM tool_calls
+    WHERE called_at >= $1 AND session_id <> ''
+), per_session AS (
+    SELECT session_id,
+           min(called_at) FILTER (WHERE is_orient) AS first_orient,
+           min(called_at) FILTER (WHERE is_write)  AS first_write,
+           bool_or(is_impact)                      AS reported_impact,
+           count(*)                                AS calls
+    FROM calls
+    GROUP BY session_id
+)
+SELECT count(*)                                                                                   AS sessions,
+       count(*) FILTER (WHERE first_orient IS NOT NULL
+                          AND (first_write IS NULL OR first_orient <= first_write))               AS oriented,
+       count(*) FILTER (WHERE first_write IS NOT NULL
+                          AND (first_orient IS NULL OR first_orient > first_write))               AS wrote_without_orient,
+       count(*) FILTER (WHERE reported_impact)                                                    AS impact_reported,
+       COALESCE(avg(calls), 0)::float8                                                            AS avg_calls
+FROM per_session;
 
 -- name: ToolCallStats :many
 -- Per-tool behavior over a window: volume, error count, latency percentiles,
@@ -72,8 +107,8 @@ LIMIT 10;
 DELETE FROM tool_calls WHERE called_at < $1;
 
 -- name: InsertSearchLog :exec
-INSERT INTO search_log (actor, query, fts_hits, semantic_hits, trigram_hits, activity_hits, returned)
-VALUES ($1, $2, $3, $4, $5, $6, $7);
+INSERT INTO search_log (actor, query, fts_hits, semantic_hits, trigram_hits, activity_hits, returned, session_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
 
 -- name: SearchUsageSummary :one
 -- semantic_rescues / trigram_rescues: searches where lexical FTS found nothing
