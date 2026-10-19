@@ -19,6 +19,11 @@ type Querier interface {
 	// it errs. orient_calls counts the read-side entry points agents are meant
 	// to start from.
 	ActorStats(ctx context.Context, calledAt time.Time) ([]ActorStatsRow, error)
+	// Nearest cosine distance to the query over live embedded items, with no
+	// ceiling applied. Logged beside each search so the max-distance ceiling can
+	// be tuned from what on-topic misses actually scored. 2 (the cosine maximum)
+	// when nothing is embedded yet.
+	BestItemSemanticDistance(ctx context.Context, arg BestItemSemanticDistanceParams) (float64, error)
 	ContextEffectivenessSummary(ctx context.Context, recordedAt time.Time) (ContextEffectivenessSummaryRow, error)
 	CountActiveAPIKeys(ctx context.Context) (int64, error)
 	CountActivitySince(ctx context.Context, arg CountActivitySinceParams) (int64, error)
@@ -32,6 +37,10 @@ type Querier interface {
 	// much is about to be destroyed. Counts soft-deleted items too: a hard delete
 	// takes them as well.
 	CountProjectContents(ctx context.Context, projectID uuid.UUID) (CountProjectContentsRow, error)
+	// How many distinct lexemes English FTS extracts from a query (stop words
+	// and punctuation removed). Decides whether the any-term tier can differ from
+	// AND-FTS at all (needs >= 2) and gates the trigram fallback.
+	CountQueryLexemes(ctx context.Context, q_ string) (int32, error)
 	CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (ApiKey, error)
 	CreateActivity(ctx context.Context, arg CreateActivityParams) (Activity, error)
 	CreateAttachment(ctx context.Context, arg CreateAttachmentParams) (Attachment, error)
@@ -173,6 +182,9 @@ type Querier interface {
 	// Hard-delete items soft-deleted before the cutoff, reclaiming index space and
 	// dropping FTS tombstones.
 	PurgeSoftDeletedItems(ctx context.Context, deletedAt *time.Time) (int64, error)
+	// Raw search log for a window, oldest first — the replay set for
+	// `flightdeck search-eval`.
+	RecentSearchLog(ctx context.Context, searchedAt time.Time) ([]RecentSearchLogRow, error)
 	RecentToolErrors(ctx context.Context, calledAt time.Time) ([]RecentToolErrorsRow, error)
 	RecentZeroResultSearches(ctx context.Context, searchedAt time.Time) ([]RecentZeroResultSearchesRow, error)
 	// After applying a peer's change both sides hold this content, so it becomes
@@ -202,6 +214,15 @@ type Querier interface {
 	// distance, bounded by max_distance like the item variant.
 	SearchActivitySemantic(ctx context.Context, arg SearchActivitySemanticParams) ([]SearchActivitySemanticRow, error)
 	SearchItems(ctx context.Context, arg SearchItemsParams) ([]SearchItemsRow, error)
+	// Any-term lexical tier with a coverage floor. plainto_tsquery ANDs every
+	// term, so a natural-language agent query ("macbook laptop setup notes")
+	// misses an item that carries most of those words. This tier ORs the query's
+	// lexemes and keeps rows matching at least min_coverage of them and at least
+	// min_matched lexemes — the floor is what stops never-filed topics from
+	// returning confident noise on a single shared word. Ranked by coverage, then
+	// ts_rank. Lexemes come pre-normalized from to_tsvector, so each is cast to a
+	// tsquery verbatim (quoted) rather than re-stemmed.
+	SearchItemsAny(ctx context.Context, arg SearchItemsAnyParams) ([]SearchItemsAnyRow, error)
 	// Trigram (pg_trgm) fuzzy match for typos / partial refs / code fragments that
 	// English FTS misses. Ranked by similarity to title or ref.
 	SearchItemsFuzzy(ctx context.Context, arg SearchItemsFuzzyParams) ([]SearchItemsFuzzyRow, error)

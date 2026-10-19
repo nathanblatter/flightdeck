@@ -459,6 +459,32 @@ var lazySemanticMinFTS = int(envFloat("FLIGHTDECK_LAZY_SEMANTIC_MIN_FTS", 5))
 var embedTimeout = time.Duration(envFloat("FLIGHTDECK_EMBED_TIMEOUT_MS", 800)) * time.Millisecond
 
 func (s *Service) SearchSmart(ctx context.Context, q string, projectID pgtype.UUID, typ *string, lim *int32, itemMax, actMax int) ([]dto.Item, []dto.Activity, error) {
+	items, acts, tiers, err := s.searchSmart(ctx, q, projectID, typ, lim, itemMax, actMax)
+	if err != nil {
+		return nil, nil, err
+	}
+	s.logSearch(ctx, auth.Actor(ctx), q, tiers, len(acts), len(items))
+	return items, acts, nil
+}
+
+// SearchTiers is the per-tier accounting of one search — what SearchSmart
+// logs to search_log, exposed for the `search-eval` replay.
+type SearchTiers struct {
+	FTS, FTSAny, Semantic, Trigram int
+	// BestSemanticDistance is the nearest cosine distance seen, ceiling or
+	// not; nil when the query was not embedded.
+	BestSemanticDistance *float64
+}
+
+// SearchEval runs the full search without writing a search_log row, so a
+// replay of past queries measures the engine instead of polluting the log it
+// is measured from.
+func (s *Service) SearchEval(ctx context.Context, q string, itemMax, actMax int) ([]dto.Item, []dto.Activity, SearchTiers, error) {
+	items, acts, t, err := s.searchSmart(ctx, q, pgtype.UUID{}, nil, nil, itemMax, actMax)
+	return items, acts, SearchTiers{FTS: t.fts, FTSAny: t.ftsAny, Semantic: t.semantic, Trigram: t.trigram, BestSemanticDistance: t.bestSemantic}, err
+}
+
+func (s *Service) searchSmart(ctx context.Context, q string, projectID pgtype.UUID, typ *string, lim *int32, itemMax, actMax int) ([]dto.Item, []dto.Activity, tierHits, error) {
 	// Record which recall path set this query's latency, so the win from lazy
 	// semantic + the Redis cache is measurable rather than assumed.
 	start := time.Now()
@@ -481,7 +507,7 @@ func (s *Service) SearchSmart(ctx context.Context, q string, projectID pgtype.UU
 		return err
 	})
 	if err := g.Wait(); err != nil {
-		return nil, nil, err
+		return nil, nil, tierHits{}, err
 	}
 
 	// Phase 2: embed only when semantic recall can actually help — the query is
@@ -517,10 +543,9 @@ func (s *Service) SearchSmart(ctx context.Context, q string, projectID pgtype.UU
 		return err
 	})
 	if err := g2.Wait(); err != nil {
-		return nil, nil, err
+		return nil, nil, tierHits{}, err
 	}
-	s.logSearch(ctx, auth.Actor(ctx), q, tiers.fts, tiers.semantic, tiers.trigram, len(acts), len(items))
-	return items, acts, nil
+	return items, acts, tiers, nil
 }
 
 // wantSemantic decides whether a query earns the embedding round-trip: it must
@@ -564,10 +589,31 @@ func (s *Service) embedQuery(ctx context.Context, q string) (*pgvec.Vector, bool
 }
 
 // tierHits counts how many results each recall tier contributed to a search —
-// the raw material for tuning search from observed behavior.
+// the raw material for tuning search from observed behavior. ftsAny counts
+// only rows the any-term tier added beyond AND-FTS; bestSemantic is the
+// nearest cosine distance seen (ceiling or not), nil when nothing was embedded.
 type tierHits struct {
-	fts, semantic, trigram int
+	fts, ftsAny, semantic, trigram int
+	bestSemantic                   *float64
 }
+
+// ftsAnyMinFTS is the AND-FTS recall below which the any-term tier runs: with
+// this many exact matches already in hand, loosening the query only adds
+// noise. Tunable via FLIGHTDECK_FTS_ANY_MIN_FTS.
+var ftsAnyMinFTS = int(envFloat("FLIGHTDECK_FTS_ANY_MIN_FTS", 5))
+
+// ftsAnyMinCoverage is the fraction of a query's lexemes a row must match to
+// clear the any-term tier. A prod replay (2026-10-03) showed a bare OR
+// recovering real hits for about half the AND misses but also returning
+// confident noise for never-filed topics on one shared word; the floor is what
+// separates the two. Tunable via FLIGHTDECK_FTS_ANY_MIN_COVERAGE.
+var ftsAnyMinCoverage = envFloat("FLIGHTDECK_FTS_ANY_MIN_COVERAGE", 0.5)
+
+// trigramMaxTokens caps the trigram fallback to short queries. Trigram
+// compares the whole query string to titles, so on a multi-word natural-
+// language query it can neither fire usefully nor fail quietly; it exists for
+// typos and ref fragments.
+const trigramMaxTokens = 2
 
 // semanticMaxDistance is the cosine-distance ceiling (0=identical, 2=opposite)
 // for a vector hit to count as relevant. Beyond it semantic contributes nothing
@@ -581,8 +627,50 @@ var semanticMaxDistance = envFloat("FLIGHTDECK_SEMANTIC_MAX_DISTANCE", 0.6)
 func (s *Service) finalizeItems(ctx context.Context, q string, fts []store.SearchItemsRow, qvec *pgvec.Vector, projectID pgtype.UUID, typ *string, lim *int32, maxBody int) ([]dto.Item, tierHits, error) {
 	var tiers tierHits
 	tiers.fts = len(fts)
+
+	// Any-term tier: when exact (AND) lexical recall is thin and the query has
+	// at least two lexemes, admit rows matching most of them. For 3+ lexemes a
+	// single shared word is never enough (min_matched 2), whatever the floor.
+	var anyItems []dto.Item
+	if len(fts) < ftsAnyMinFTS {
+		lexemes, err := s.St.CountQueryLexemes(ctx, q)
+		if err != nil {
+			log.Printf("count query lexemes (skipping any-term tier): %v", err)
+		} else if lexemes >= 2 {
+			minMatched := int32(1)
+			if lexemes >= 3 {
+				minMatched = 2
+			}
+			rows, err := s.St.SearchItemsAny(ctx, store.SearchItemsAnyParams{
+				Q: q, ProjectID: projectID, Type: typ, Lim: lim,
+				MinMatched: minMatched, MinCoverage: ftsAnyMinCoverage,
+			})
+			if err != nil {
+				log.Printf("any-term item search (continuing without it): %v", err)
+			} else {
+				anyItems = dto.ToAnyItemsTrunc(rows, maxBody)
+				exact := make(map[uuid.UUID]bool, len(fts))
+				for _, r := range fts {
+					exact[r.ID] = true
+				}
+				for _, r := range rows {
+					if !exact[r.ID] {
+						tiers.ftsAny++
+					}
+				}
+			}
+		}
+	}
+
 	var sem []dto.Item
 	if qvec != nil {
+		if d, err := s.St.BestItemSemanticDistance(ctx, store.BestItemSemanticDistanceParams{
+			QueryEmbedding: *qvec, ProjectID: projectID, Type: typ,
+		}); err != nil {
+			log.Printf("best semantic distance (skipping): %v", err)
+		} else {
+			tiers.bestSemantic = &d
+		}
 		rows, err := s.St.SearchItemsSemantic(ctx, store.SearchItemsSemanticParams{
 			QueryEmbedding: *qvec,
 			ProjectID:      projectID,
@@ -598,9 +686,12 @@ func (s *Service) finalizeItems(ctx context.Context, q string, fts []store.Searc
 			tiers.semantic = len(sem)
 		}
 	}
-	merged := rrfMerge(func(it dto.Item) string { return it.ID }, dto.ToSearchItemsTrunc(fts, maxBody), sem)
+	merged := rrfMerge(func(it dto.Item) string { return it.ID }, dto.ToSearchItemsTrunc(fts, maxBody), anyItems, sem)
 	if len(merged) > 0 {
 		return capLen(merged, lim), tiers, nil
+	}
+	if len(strings.Fields(q)) > trigramMaxTokens {
+		return nil, tiers, nil
 	}
 	fz, err := s.St.SearchItemsFuzzy(ctx, store.SearchItemsFuzzyParams{Q: q, ProjectID: projectID, Type: typ, Lim: lim})
 	if err != nil {

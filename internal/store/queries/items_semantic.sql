@@ -38,3 +38,15 @@ WHERE i.deleted_at IS NULL
   AND (i.embedding <=> sqlc.arg('query_embedding')::vector) < sqlc.arg('max_distance')::float8
 ORDER BY i.embedding <=> sqlc.arg('query_embedding')::vector
 LIMIT COALESCE(sqlc.narg('lim')::int, 25);
+
+-- name: BestItemSemanticDistance :one
+-- Nearest cosine distance to the query over live embedded items, with no
+-- ceiling applied. Logged beside each search so the max-distance ceiling can
+-- be tuned from what on-topic misses actually scored. 2 (the cosine maximum)
+-- when nothing is embedded yet.
+SELECT COALESCE(min(i.embedding <=> sqlc.arg('query_embedding')::vector), 2)::float8 AS distance
+FROM items i
+WHERE i.deleted_at IS NULL
+  AND i.embedding IS NOT NULL
+  AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
+  AND (sqlc.narg('type')::text IS NULL OR i.type = sqlc.narg('type'));

@@ -15,6 +15,32 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bestItemSemanticDistance = `-- name: BestItemSemanticDistance :one
+SELECT COALESCE(min(i.embedding <=> $1::vector), 2)::float8 AS distance
+FROM items i
+WHERE i.deleted_at IS NULL
+  AND i.embedding IS NOT NULL
+  AND ($2::uuid IS NULL OR i.project_id = $2)
+  AND ($3::text IS NULL OR i.type = $3)
+`
+
+type BestItemSemanticDistanceParams struct {
+	QueryEmbedding pgvec.Vector `json:"query_embedding"`
+	ProjectID      pgtype.UUID  `json:"project_id"`
+	Type           *string      `json:"type"`
+}
+
+// Nearest cosine distance to the query over live embedded items, with no
+// ceiling applied. Logged beside each search so the max-distance ceiling can
+// be tuned from what on-topic misses actually scored. 2 (the cosine maximum)
+// when nothing is embedded yet.
+func (q *Queries) BestItemSemanticDistance(ctx context.Context, arg BestItemSemanticDistanceParams) (float64, error) {
+	row := q.db.QueryRow(ctx, bestItemSemanticDistance, arg.QueryEmbedding, arg.ProjectID, arg.Type)
+	var distance float64
+	err := row.Scan(&distance)
+	return distance, err
+}
+
 const listItemsNeedingEmbedding = `-- name: ListItemsNeedingEmbedding :many
 SELECT id, ref, title, body
 FROM items

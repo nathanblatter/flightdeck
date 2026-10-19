@@ -414,7 +414,7 @@ func (h *handlers) register(s *mcpsdk.Server) {
 
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "search",
-		Description: "Search items and activity. Cascades full-text → semantic (meaning-based, vector) → trigram (typos/fragments) recall.",
+		Description: "Search items and activity. Blends exact full-text, any-term (most words match), and semantic (meaning-based, vector) recall; short queries fall back to trigram for typos/fragments.",
 	}, h.search)
 
 	addTool(h, s, &mcpsdk.Tool{
