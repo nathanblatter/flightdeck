@@ -162,7 +162,7 @@ func TestSessionClassification(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := rep.Sessions
-	want := dto.SessionUsage{Sessions: 7, Oriented: 4, WroteWithoutOrient: 3, ImpactReported: 1, OrientRate: 4.0 / 7, AvgCalls: 14.0 / 7}
+	want := dto.SessionUsage{Sessions: 7, Oriented: 4, WroteWithoutOrient: 3, ImpactReported: 1, OrientRate: 4.0 / 7, ImpactCoverage: 1.0 / 4, AvgCalls: 14.0 / 7}
 	if got != want {
 		t.Fatalf("sessions = %+v, want %+v", got, want)
 	}

@@ -630,7 +630,11 @@ type SessionUsage struct {
 	WroteWithoutOrient int     `json:"wrote_without_orient"`
 	ImpactReported     int     `json:"impact_reported"`
 	OrientRate         float64 `json:"orient_rate"`
-	AvgCalls           float64 `json:"avg_calls"`
+	// ImpactCoverage is impact_reported / oriented: how much of the context
+	// that was actually read got an outcome reported. Low coverage means the
+	// context_effectiveness block rests on a thin sample.
+	ImpactCoverage float64 `json:"impact_coverage"`
+	AvgCalls       float64 `json:"avg_calls"`
 }
 
 // SearchUsage reports search quality: zero-result queries are recall gaps;
