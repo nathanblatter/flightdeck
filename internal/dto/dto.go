@@ -97,6 +97,11 @@ type Item struct {
 	// the count of criteria not yet satisfied (the contract still owed).
 	AcceptanceCriteria []Criterion `json:"acceptance_criteria,omitempty"`
 	AcceptanceUnmet    int         `json:"acceptance_unmet,omitempty"`
+	// compact switches MarshalJSON to the lean orient shape: no uuid,
+	// project_id, position, source, created_at, closed_at or version — fields
+	// an agent working from a project bundle never passes back (ref is the
+	// handle everywhere). Set by Item.Compact(); never serialized itself.
+	compact bool
 	// Attachments (screenshots) are populated on single-item fetches only —
 	// list views skip them to avoid an N+1.
 	Attachments []Attachment `json:"attachments,omitempty"`
@@ -153,6 +158,45 @@ func ToItemsTrunc(items []store.Item, maxBody int) []Item {
 		out[i] = ToItemTrunc(it, maxBody)
 	}
 	return out
+}
+
+// Compact marks the item for lean serialization (see Item.compact).
+func (i Item) Compact() Item {
+	i.compact = true
+	return i
+}
+
+// compactItem is the lean JSON shape of an Item on compact orient bundles.
+type compactItem struct {
+	Ref                string         `json:"ref"`
+	Type               string         `json:"type"`
+	Title              string         `json:"title"`
+	Body               string         `json:"body,omitempty"`
+	Status             string         `json:"status"`
+	Priority           string         `json:"priority"`
+	Assignee           *string        `json:"assignee,omitempty"`
+	ExternalRef        *string        `json:"external_ref,omitempty"`
+	Tags               []string       `json:"tags,omitempty"`
+	Metadata           map[string]any `json:"metadata,omitempty"`
+	UpdatedAt          time.Time      `json:"updated_at"`
+	Blocked            bool           `json:"blocked,omitempty"`
+	BlockedBy          []string       `json:"blocked_by,omitempty"`
+	AcceptanceCriteria []Criterion    `json:"acceptance_criteria,omitempty"`
+	AcceptanceUnmet    int            `json:"acceptance_unmet,omitempty"`
+}
+
+// MarshalJSON emits the full shape unless the item was marked Compact().
+func (i Item) MarshalJSON() ([]byte, error) {
+	if !i.compact {
+		type plain Item // no methods: avoids recursing into MarshalJSON
+		return json.Marshal(plain(i))
+	}
+	return json.Marshal(compactItem{
+		Ref: i.Ref, Type: i.Type, Title: i.Title, Body: i.Body, Status: i.Status, Priority: i.Priority,
+		Assignee: i.Assignee, ExternalRef: i.ExternalRef, Tags: i.Tags, Metadata: i.Metadata,
+		UpdatedAt: i.UpdatedAt, Blocked: i.Blocked, BlockedBy: i.BlockedBy,
+		AcceptanceCriteria: i.AcceptanceCriteria, AcceptanceUnmet: i.AcceptanceUnmet,
+	})
 }
 
 // trunc shortens s to max runes (0 = no limit), appending "…" when it cut.

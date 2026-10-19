@@ -881,12 +881,28 @@ func (h *handlers) completeItem(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 	return dto.ToItem(item), nil
 }
 
-func (h *handlers) setProjectInstructions(ctx context.Context, _ *mcpsdk.CallToolRequest, in setInstructionsIn) (dto.Project, error) {
+type projectWithNudges struct {
+	dto.Project
+	Nudges []string `json:"nudges,omitempty"`
+}
+
+// instructionsNudgeChars is the size past which set_project_instructions
+// nudges the caller. Instructions ride on every get_project_context, so a
+// project whose instructions grow into a narrative taxes every session start.
+const instructionsNudgeChars = 3000
+
+func (h *handlers) setProjectInstructions(ctx context.Context, _ *mcpsdk.CallToolRequest, in setInstructionsIn) (projectWithNudges, error) {
 	p, err := h.st.SetProjectInstructions(ctx, store.SetProjectInstructionsParams{Slug: in.Slug, Instructions: in.Instructions})
 	if err != nil {
-		return dto.Project{}, err
+		return projectWithNudges{}, err
 	}
-	return dto.ToProject(p), nil
+	out := projectWithNudges{Project: dto.ToProject(p)}
+	if n := len(in.Instructions); n > instructionsNudgeChars {
+		out.Nudges = append(out.Nudges, fmt.Sprintf(
+			"instructions are %d chars and are returned on every get_project_context; keep them to stack, verify commands, deploy path and gotchas (aim under %d) and put history or narrative in log_activity or the summary",
+			n, instructionsNudgeChars))
+	}
+	return out, nil
 }
 
 func (h *handlers) archiveProject(ctx context.Context, _ *mcpsdk.CallToolRequest, in archiveProjectIn) (okOut, error) {

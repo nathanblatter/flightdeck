@@ -236,6 +236,13 @@ func (s *Service) buildProjectContext(ctx context.Context, slug string, v Verbos
 		return dto.ProjectContext{}, err
 	}
 	itemMax, actMax := bodyLimits(v)
+	openLimit, recentLimit := int32(50), int32(15)
+	if v == VerbosityCompact {
+		// Orient is paid in tokens on every session start; the compact bundle
+		// keeps the top of the priority-ordered list and the latest decisions.
+		// counts still report the totals, and list_items pages the rest.
+		openLimit, recentLimit = compactOpenItems, compactRecentActivity
+	}
 
 	var (
 		open         []store.Item
@@ -248,11 +255,11 @@ func (s *Service) buildProjectContext(ctx context.Context, slug string, v Verbos
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
-		open, err = s.St.ListOpenItemsByProject(gctx, store.ListOpenItemsByProjectParams{ProjectID: p.ID, Limit: 50})
+		open, err = s.St.ListOpenItemsByProject(gctx, store.ListOpenItemsByProjectParams{ProjectID: p.ID, Limit: openLimit})
 		return
 	})
 	g.Go(func() (err error) {
-		recent, err = s.St.ListRecentDecisionsByProject(gctx, store.ListRecentDecisionsByProjectParams{ProjectID: p.ID, Limit: 15})
+		recent, err = s.St.ListRecentDecisionsByProject(gctx, store.ListRecentDecisionsByProjectParams{ProjectID: p.ID, Limit: recentLimit})
 		return
 	})
 	g.Go(func() (err error) {
@@ -295,6 +302,9 @@ func (s *Service) buildProjectContext(ctx context.Context, slug string, v Verbos
 			openItems[i].Blocked = true
 			openItems[i].BlockedBy = blockers
 		}
+		if v == VerbosityCompact {
+			openItems[i] = openItems[i].Compact()
+		}
 	}
 	countMap := make(map[string]int, len(counts))
 	for _, c := range counts {
@@ -322,6 +332,12 @@ func (s *Service) buildProjectContext(ctx context.Context, slug string, v Verbos
 // orientHints derives the "what's next + housekeeping" layer from the already
 // loaded open items, so orient folds in next_action and stale signals without
 // extra round trips. openItems must be priority-ordered with Blocked flags set.
+// compactOpenItems / compactRecentActivity cap the compact orient bundle.
+const (
+	compactOpenItems      = 25
+	compactRecentActivity = 10
+)
+
 func orientHints(openItems []dto.Item, sinceSummary int) (readyNext []dto.ItemBrief, nudges []string) {
 	const readyLimit = 3
 	staleCutoff := time.Now().Add(-24 * time.Hour)
