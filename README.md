@@ -229,10 +229,26 @@ Embed on any public site (uses an ingest-only key):
         data-key="fd_your_ingest_key" defer></script>
 ```
 
-## Semantic search
+## Search tiers
 
-`search` cascades full-text → **semantic** (meaning-based) → trigram. The
-semantic tier embeds items with OpenAI `text-embedding-3-small` (1536-dim,
+`search` blends exact full-text (AND of every term), an **any-term** tier, and
+**semantic** (meaning-based) recall with reciprocal-rank fusion; queries of one
+or two words with no hit anywhere fall back to trigram for typos and ref
+fragments.
+
+The any-term tier runs when exact FTS returns fewer than 5 items
+(`FLIGHTDECK_FTS_ANY_MIN_FTS`) and the query has 2+ lexemes. It ORs the
+lexemes and keeps rows matching at least half of them
+(`FLIGHTDECK_FTS_ANY_MIN_COVERAGE`, default `0.5`) and at least 2 lexemes for
+3+ word queries — so a natural-language agent query lands on the item that
+carries most of its words, while a never-filed topic sharing one word still
+returns nothing.
+
+`flightdeck search-eval --days N` replays the logged searches of the last N
+days through the current engine (without logging) and prints a per-tier
+before/after table, so a recall change is judged on real agent queries.
+
+The semantic tier embeds items with OpenAI `text-embedding-3-small` (1536-dim,
 pgvector HNSW cosine index) so conceptually-related items surface even with no
 shared keywords.
 

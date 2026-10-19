@@ -56,11 +56,14 @@ func main() {
 		case "update":
 			runUpdate(os.Args[2:])
 			return
+		case "search-eval":
+			runSearchEval(os.Args[2:])
+			return
 		case "version", "--version", "-v":
 			fmt.Println(Version)
 			return
 		default:
-			fmt.Fprintf(os.Stderr, "unknown command %q\n\nusage: flightdeck [serve|migrate|keygen|keys|up|update|version]\n", os.Args[1])
+			fmt.Fprintf(os.Stderr, "unknown command %q\n\nusage: flightdeck [serve|migrate|keygen|keys|up|update|search-eval|version]\n", os.Args[1])
 			os.Exit(2)
 		}
 	}

@@ -163,16 +163,18 @@ type ProjectShareState struct {
 }
 
 type SearchLog struct {
-	ID           int64     `json:"id"`
-	SearchedAt   time.Time `json:"searched_at"`
-	Actor        string    `json:"actor"`
-	Query        string    `json:"query"`
-	FtsHits      int32     `json:"fts_hits"`
-	SemanticHits int32     `json:"semantic_hits"`
-	TrigramHits  int32     `json:"trigram_hits"`
-	ActivityHits int32     `json:"activity_hits"`
-	Returned     int32     `json:"returned"`
-	SessionID    string    `json:"session_id"`
+	ID                   int64     `json:"id"`
+	SearchedAt           time.Time `json:"searched_at"`
+	Actor                string    `json:"actor"`
+	Query                string    `json:"query"`
+	FtsHits              int32     `json:"fts_hits"`
+	SemanticHits         int32     `json:"semantic_hits"`
+	TrigramHits          int32     `json:"trigram_hits"`
+	ActivityHits         int32     `json:"activity_hits"`
+	Returned             int32     `json:"returned"`
+	SessionID            string    `json:"session_id"`
+	FtsAnyHits           int32     `json:"fts_any_hits"`
+	BestSemanticDistance *float64  `json:"best_semantic_distance"`
 }
 
 type Setting struct {

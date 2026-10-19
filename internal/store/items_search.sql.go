@@ -15,6 +15,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countQueryLexemes = `-- name: CountQueryLexemes :one
+SELECT count(DISTINCT lexeme)::int AS n FROM unnest(tsvector_to_array(to_tsvector('english', $1::text))) AS lexeme
+`
+
+// How many distinct lexemes English FTS extracts from a query (stop words
+// and punctuation removed). Decides whether the any-term tier can differ from
+// AND-FTS at all (needs >= 2) and gates the trigram fallback.
+func (q *Queries) CountQueryLexemes(ctx context.Context, q_ string) (int32, error) {
+	row := q.db.QueryRow(ctx, countQueryLexemes, q_)
+	var n int32
+	err := row.Scan(&n)
+	return n, err
+}
+
 const listTopOpenItemsPerProject = `-- name: ListTopOpenItemsPerProject :many
 SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, project_slug, rn FROM (
     SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, p.slug AS project_slug,
@@ -198,6 +212,140 @@ func (q *Queries) SearchItems(ctx context.Context, arg SearchItemsParams) ([]Sea
 			&i.Version,
 			&i.Embedding,
 			&i.EmbeddingModel,
+			&i.Rank,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchItemsAny = `-- name: SearchItemsAny :many
+WITH ql AS (
+    SELECT DISTINCT lexeme FROM unnest(tsvector_to_array(to_tsvector('english', $4::text))) AS lexeme
+), n AS (
+    SELECT count(*)::int AS total FROM ql
+), anyq AS (
+    SELECT string_agg(format('%L', lexeme), ' | ')::tsquery AS q FROM ql
+), hits AS (
+    SELECT i.id,
+           (SELECT count(*) FROM ql WHERE i.search @@ format('%L', ql.lexeme)::tsquery)::int AS matched,
+           ts_rank(i.search, anyq.q) AS rank
+    FROM items i, anyq
+    WHERE i.deleted_at IS NULL
+      AND i.search @@ anyq.q
+      AND ($5::uuid IS NULL OR i.project_id = $5)
+      AND ($6::text IS NULL OR i.type = $6)
+)
+SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, h.matched, n.total, (h.matched::float8 / n.total)::float8 AS coverage, h.rank
+FROM hits h
+JOIN items i ON i.id = h.id
+CROSS JOIN n
+WHERE n.total >= 2
+  AND h.matched >= $1::int
+  AND h.matched::float8 / n.total >= $2::float8
+ORDER BY coverage DESC, h.rank DESC
+LIMIT COALESCE($3::int, 50)
+`
+
+type SearchItemsAnyParams struct {
+	MinMatched  int32       `json:"min_matched"`
+	MinCoverage float64     `json:"min_coverage"`
+	Lim         *int32      `json:"lim"`
+	Q           string      `json:"q"`
+	ProjectID   pgtype.UUID `json:"project_id"`
+	Type        *string     `json:"type"`
+}
+
+type SearchItemsAnyRow struct {
+	ID                 uuid.UUID       `json:"id"`
+	ProjectID          uuid.UUID       `json:"project_id"`
+	Type               string          `json:"type"`
+	Title              string          `json:"title"`
+	Body               string          `json:"body"`
+	Status             string          `json:"status"`
+	Priority           string          `json:"priority"`
+	Assignee           *string         `json:"assignee"`
+	Position           float64         `json:"position"`
+	Source             string          `json:"source"`
+	ExternalRef        *string         `json:"external_ref"`
+	Tags               []string        `json:"tags"`
+	Metadata           json.RawMessage `json:"metadata"`
+	CreatedAt          time.Time       `json:"created_at"`
+	UpdatedAt          time.Time       `json:"updated_at"`
+	ClosedAt           *time.Time      `json:"closed_at"`
+	DeletedAt          *time.Time      `json:"deleted_at"`
+	Search             interface{}     `json:"search"`
+	IdempotencyKey     *string         `json:"idempotency_key"`
+	AcceptanceCriteria json.RawMessage `json:"acceptance_criteria"`
+	Seq                int64           `json:"seq"`
+	Ref                string          `json:"ref"`
+	Version            int32           `json:"version"`
+	Embedding          pgvec.Vector    `json:"embedding"`
+	EmbeddingModel     string          `json:"embedding_model"`
+	Matched            int32           `json:"matched"`
+	Total              int32           `json:"total"`
+	Coverage           float64         `json:"coverage"`
+	Rank               float32         `json:"rank"`
+}
+
+// Any-term lexical tier with a coverage floor. plainto_tsquery ANDs every
+// term, so a natural-language agent query ("macbook laptop setup notes")
+// misses an item that carries most of those words. This tier ORs the query's
+// lexemes and keeps rows matching at least min_coverage of them and at least
+// min_matched lexemes — the floor is what stops never-filed topics from
+// returning confident noise on a single shared word. Ranked by coverage, then
+// ts_rank. Lexemes come pre-normalized from to_tsvector, so each is cast to a
+// tsquery verbatim (quoted) rather than re-stemmed.
+func (q *Queries) SearchItemsAny(ctx context.Context, arg SearchItemsAnyParams) ([]SearchItemsAnyRow, error) {
+	rows, err := q.db.Query(ctx, searchItemsAny,
+		arg.MinMatched,
+		arg.MinCoverage,
+		arg.Lim,
+		arg.Q,
+		arg.ProjectID,
+		arg.Type,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchItemsAnyRow
+	for rows.Next() {
+		var i SearchItemsAnyRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Type,
+			&i.Title,
+			&i.Body,
+			&i.Status,
+			&i.Priority,
+			&i.Assignee,
+			&i.Position,
+			&i.Source,
+			&i.ExternalRef,
+			&i.Tags,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ClosedAt,
+			&i.DeletedAt,
+			&i.Search,
+			&i.IdempotencyKey,
+			&i.AcceptanceCriteria,
+			&i.Seq,
+			&i.Ref,
+			&i.Version,
+			&i.Embedding,
+			&i.EmbeddingModel,
+			&i.Matched,
+			&i.Total,
+			&i.Coverage,
 			&i.Rank,
 		); err != nil {
 			return nil, err
