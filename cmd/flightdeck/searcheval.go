@@ -70,6 +70,6 @@ func runSearchEval(args []string) {
 			tiers.FTS, tiers.FTSAny, tiers.Semantic, tiers.Trigram, len(items),
 			dist, change)
 	}
-	tw.Flush()
+	_ = tw.Flush()
 	fmt.Printf("\n%d searches: zero-result %d → %d (rescued %d, lost %d)\n", len(rows), zeroBefore, zeroAfter, rescued, lost)
 }
