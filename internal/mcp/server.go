@@ -37,19 +37,53 @@ type handlers struct {
 	// can flag registered-but-never-called tools.
 	toolNames []string
 	// nudged remembers which MCP sessions have already received the
-	// record_context_impact nudge (session id → struct{}), so it rides on
-	// exactly one write per session. Reset wholesale past nudgedMax entries:
-	// a repeat nudge on a very old session is harmless.
-	nudged  sync.Map
-	nudgedN atomic.Int64
+	// record_context_impact nudge, so it rides on exactly one write per
+	// session; oriented remembers which sessions have called an orient tool,
+	// so a session's first write can be told it skipped orientation.
+	nudged   sessionSet
+	oriented sessionSet
 }
 
-const nudgedMax = 10000
+// sessionSet is a bounded set of MCP session ids. Past sessionSetMax entries
+// it resets wholesale: a repeat nudge on a very old session is harmless.
+type sessionSet struct {
+	m sync.Map
+	n atomic.Int64
+}
+
+const sessionSetMax = 10000
+
+// add inserts the session and reports whether it was new. The empty
+// (REST-style, sessionless) id is never a member.
+func (s *sessionSet) add(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	if _, loaded := s.m.LoadOrStore(sessionID, struct{}{}); loaded {
+		return false
+	}
+	if s.n.Add(1) > sessionSetMax {
+		s.m.Range(func(k, _ any) bool { s.m.Delete(k); return true })
+		s.n.Store(0)
+	}
+	return true
+}
+
+func (s *sessionSet) has(sessionID string) bool {
+	_, ok := s.m.Load(sessionID)
+	return ok
+}
 
 // impactNudge is appended as a second content block to the first successful
 // write of each MCP session. One sentence: the agent is mid-task and has
 // already paid for the write it asked for.
 const impactNudge = "flightdeck: before this session ends, call record_context_impact once (effect helpful|neutral|harmful; neutral is a valid answer; session_id defaults to this session)."
+
+// orientNudge rides with impactNudge when the session's first write arrives
+// before any orient call: the agent is working on a project whose context it
+// has not read. %s is a get_project_context(slug) hint when the write named a
+// project, else get_global_context.
+const orientNudge = "flightdeck: this session wrote before reading project context — call %s now so your work builds on what is already recorded (summary, open items, recent decisions)."
 
 // writeTools are the tools whose first successful call in a session carries
 // the impact nudge — the same set usage_report counts as writes.
@@ -60,20 +94,39 @@ var writeTools = map[string]bool{
 	"add_item_ref": true,
 }
 
-// nudgeOnce reports whether this is the first write on the session and marks
-// it. Sessionless (REST-style) calls are never nudged.
-func (h *handlers) nudgeOnce(sessionID string) bool {
-	if sessionID == "" {
-		return false
+// orientTools are the calls that count as orientation — the same pair
+// usage_report's sessions block counts.
+var orientTools = map[string]bool{"get_project_context": true, "get_global_context": true}
+
+// orientHint names the orient call for a write's project. Write inputs are
+// not one type, so it reads the marshaled input for a top-level "project" or
+// "slug" string (create_items carries its projects per item: the first wins).
+func orientHint(in any) string {
+	b, err := json.Marshal(in)
+	if err != nil {
+		return "get_global_context"
 	}
-	if _, loaded := h.nudged.LoadOrStore(sessionID, struct{}{}); loaded {
-		return false
+	var m struct {
+		Project string `json:"project"`
+		Slug    string `json:"slug"`
+		Items   []struct {
+			Project string `json:"project"`
+		} `json:"items"`
 	}
-	if h.nudgedN.Add(1) > nudgedMax {
-		h.nudged.Range(func(k, _ any) bool { h.nudged.Delete(k); return true })
-		h.nudgedN.Store(0)
+	if err := json.Unmarshal(b, &m); err != nil {
+		return "get_global_context"
 	}
-	return true
+	slug := m.Project
+	if slug == "" {
+		slug = m.Slug
+	}
+	if slug == "" && len(m.Items) > 0 {
+		slug = m.Items[0].Project
+	}
+	if slug == "" {
+		return "get_global_context"
+	}
+	return fmt.Sprintf("get_project_context(%q)", slug)
 }
 
 // addTool registers a tool and records its name in h.toolNames.
@@ -96,8 +149,15 @@ func addTool[In, Out any](h *handlers, s *mcpsdk.Server, t *mcpsdk.Tool, fn func
 			return nil, nil, err
 		}
 		content := []mcpsdk.Content{&mcpsdk.TextContent{Text: string(b)}}
-		if writeTools[t.Name] && h.nudgeOnce(service.SessionID(ctx)) {
+		sid := service.SessionID(ctx)
+		if orientTools[t.Name] {
+			h.oriented.add(sid)
+		}
+		if writeTools[t.Name] && h.nudged.add(sid) {
 			content = append(content, &mcpsdk.TextContent{Text: impactNudge})
+			if sid != "" && !h.oriented.has(sid) {
+				content = append(content, &mcpsdk.TextContent{Text: fmt.Sprintf(orientNudge, orientHint(in))})
+			}
 		}
 		return &mcpsdk.CallToolResult{Content: content}, nil, nil
 	})
@@ -108,11 +168,11 @@ func addTool[In, Out any](h *handlers, s *mcpsdk.Server, t *mcpsdk.Tool, fn func
 // response so every MCP client — not only one with a hand-written CLAUDE.md —
 // learns the orient → work → log loop that keeps the store fresh. Kept under
 // 600 characters: it rides on every session start.
-const Instructions = "Flightdeck is the shared memory for projects: what each one is, what's open, what was decided and why. " +
-	"Orient first: get_project_context(slug) for the project you're in (get_global_context across projects, list_projects to find a slug). " +
+const Instructions = "Orient before your first write: get_project_context(slug) for the project you're in (get_global_context across projects, list_projects to find a slug). " +
+	"Flightdeck is the shared memory for projects: what each one is, what's open, what was decided and why. " +
 	"Keep it fresh as you work: create_item for new tasks/bugs/ideas, update_item to move status, log_activity for decisions and progress — capture the why. " +
 	"Search before filing what may exist. " +
-	"Before you finish, call record_context_impact once: did the context help, hurt, or make no difference? neutral is a valid answer; session_id defaults to this session."
+	"Before you finish, call record_context_impact once: did the context help, hurt, or neither? neutral is valid; session_id defaults to this session."
 
 // NewHandler builds the MCP server, registers all tools, and returns an
 // http.Handler serving the streamable-HTTP transport (mount it at /mcp).
@@ -565,7 +625,7 @@ func (h *handlers) register(s *mcpsdk.Server) {
 
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "usage_report",
-		Description: "How agents used flightdeck over a window: per-tool call/error/latency/payload stats, unused tools, daily volume, top projects, and search quality (zero-result queries, semantic/trigram rescues). Use it to tune the service from observed behavior.",
+		Description: "How agents used flightdeck over a window: per-tool call/error/latency/payload stats, unused tools, daily volume, top projects, search quality (zero-result queries, semantic/trigram rescues), and MCP sessions (orient_rate = oriented/sessions; impact_coverage = sessions that read context and reported an outcome / sessions that read context, so it is bounded to [0,1]; reported_without_read and impact_calls expose reports that rate nothing and repeat reports). Use it to tune the service from observed behavior.",
 	}, h.usageReport)
 }
 

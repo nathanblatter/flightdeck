@@ -16,7 +16,9 @@ import (
 
 // record_context_impact without session_id stores the MCP session id; the
 // impact nudge rides on exactly the first successful write of a session and
-// never on reads; a second session gets its own nudge.
+// never on reads; a second session gets its own nudge. A session that writes
+// before orienting also gets the orient nudge, naming the project when the
+// write carried one; an oriented session never sees it.
 func TestImpactDefaultsToMCPSessionAndNudgesOnce(t *testing.T) {
 	st, svc := setup(t)
 	ctx := context.Background()
@@ -50,14 +52,16 @@ func TestImpactDefaultsToMCPSessionAndNudgesOnce(t *testing.T) {
 		}
 		return res
 	}
-	hasNudge := func(res *mcpsdk.CallToolResult) bool {
+	hasText := func(res *mcpsdk.CallToolResult, needle string) bool {
 		for _, c := range res.Content[1:] {
-			if tc, ok := c.(*mcpsdk.TextContent); ok && strings.Contains(tc.Text, "record_context_impact") {
+			if tc, ok := c.(*mcpsdk.TextContent); ok && strings.Contains(tc.Text, needle) {
 				return true
 			}
 		}
 		return false
 	}
+	hasNudge := func(res *mcpsdk.CallToolResult) bool { return hasText(res, "record_context_impact") }
+	hasOrientNudge := func(res *mcpsdk.CallToolResult) bool { return hasText(res, "wrote before reading project context") }
 
 	s1 := connect()
 	defer s1.Close()
@@ -65,8 +69,8 @@ func TestImpactDefaultsToMCPSessionAndNudgesOnce(t *testing.T) {
 		t.Fatal("read carried the nudge")
 	}
 	first := call(s1, "log_activity", map[string]any{"project": "imp", "kind": "progress", "body": "one"})
-	if len(first.Content) != 2 || !hasNudge(first) {
-		t.Fatalf("first write should carry exactly one nudge block, got %d blocks", len(first.Content))
+	if len(first.Content) != 2 || !hasNudge(first) || hasOrientNudge(first) {
+		t.Fatalf("oriented session's first write should carry exactly the impact nudge, got %d blocks", len(first.Content))
 	}
 	second := call(s1, "log_activity", map[string]any{"project": "imp", "kind": "progress", "body": "two"})
 	if len(second.Content) != 1 || hasNudge(second) {
@@ -99,10 +103,24 @@ func TestImpactDefaultsToMCPSessionAndNudgesOnce(t *testing.T) {
 		t.Fatalf("explicit session_id not honoured (%d rows)", n)
 	}
 
-	// A fresh session gets its own single nudge.
+	// A fresh session that writes without orienting gets both nudges; the
+	// orient hint falls back to get_global_context when the write names no
+	// project.
 	s2 := connect()
 	defer s2.Close()
-	if !hasNudge(call(s2, "update_item", map[string]any{"id": item.Ref, "status": "todo"})) {
-		t.Fatal("second session's first write was not nudged")
+	blind := call(s2, "update_item", map[string]any{"id": item.Ref, "status": "todo"})
+	if len(blind.Content) != 3 || !hasNudge(blind) || !hasOrientNudge(blind) || !hasText(blind, "get_global_context") {
+		t.Fatalf("unoriented session's first write should carry impact + orient nudges, got %d blocks: %+v", len(blind.Content), blind.Content)
+	}
+	if n := len(call(s2, "log_activity", map[string]any{"project": "imp", "kind": "progress", "body": "x"}).Content); n != 1 {
+		t.Fatalf("unoriented session's second write should not be nudged again, got %d blocks", n)
+	}
+
+	// A write that names a project gets a get_project_context(slug) hint.
+	s3 := connect()
+	defer s3.Close()
+	named := call(s3, "log_activity", map[string]any{"project": "imp", "kind": "progress", "body": "y"})
+	if !hasOrientNudge(named) || !hasText(named, `get_project_context("imp")`) {
+		t.Fatalf("orient nudge should name the project, got %+v", named.Content)
 	}
 }

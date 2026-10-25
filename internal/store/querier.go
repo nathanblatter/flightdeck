@@ -238,7 +238,12 @@ type Querier interface {
 	// session and records ''). A session is "oriented" when an orient call
 	// (get_project_context / get_global_context) happens before — or without —
 	// any write; "wrote_without_orient" when its first write precedes any orient
-	// call. impact_reported counts sessions that called record_context_impact.
+	// call. read_context widens that to any context read (orient tools, get_item,
+	// list_items, search): a session that read something can meaningfully rate it.
+	// impact_reported counts sessions that called record_context_impact;
+	// impact_calls counts the calls themselves (several per session means the
+	// agent reported more than once); reported_without_read counts reporting
+	// sessions that never read any context, whose reports rate nothing.
 	// list_projects / resolve_project are slug lookups, not orientation, so they
 	// do not count here even though ActorStats counts them as orient_calls.
 	SessionStats(ctx context.Context, calledAt time.Time) (SessionStatsRow, error)

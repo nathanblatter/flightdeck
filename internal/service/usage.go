@@ -173,13 +173,16 @@ func (s *Service) UsageReport(ctx context.Context, days int, knownTools []string
 		})
 	}
 	rep.Sessions = dto.SessionUsage{
-		Sessions:           int(sessions.Sessions),
-		Oriented:           int(sessions.Oriented),
-		WroteWithoutOrient: int(sessions.WroteWithoutOrient),
-		ImpactReported:     int(sessions.ImpactReported),
-		OrientRate:         contextImpactRate(int(sessions.Oriented), int(sessions.Sessions)),
-		ImpactCoverage:     contextImpactRate(int(sessions.ImpactReported), int(sessions.Oriented)),
-		AvgCalls:           sessions.AvgCalls,
+		Sessions:            int(sessions.Sessions),
+		Oriented:            int(sessions.Oriented),
+		WroteWithoutOrient:  int(sessions.WroteWithoutOrient),
+		ReadContext:         int(sessions.ReadContext),
+		ImpactReported:      int(sessions.ImpactReported),
+		ReportedWithoutRead: int(sessions.ReportedWithoutRead),
+		ImpactCalls:         int(sessions.ImpactCalls),
+		OrientRate:          contextImpactRate(int(sessions.Oriented), int(sessions.Sessions)),
+		ImpactCoverage:      contextImpactRate(int(sessions.ImpactReported-sessions.ReportedWithoutRead), int(sessions.ReadContext)),
+		AvgCalls:            sessions.AvgCalls,
 	}
 	for _, e := range errsRows {
 		rep.RecentErrors = append(rep.RecentErrors, dto.ToolError{Tool: e.Tool, Error: e.Error, At: e.CalledAt})
