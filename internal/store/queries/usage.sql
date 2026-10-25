@@ -7,12 +7,18 @@ VALUES ($1, $2, $3, $4, $5, $6, COALESCE(sqlc.narg('args')::jsonb, '{}'), $7, $8
 -- session and records ''). A session is "oriented" when an orient call
 -- (get_project_context / get_global_context) happens before — or without —
 -- any write; "wrote_without_orient" when its first write precedes any orient
--- call. impact_reported counts sessions that called record_context_impact.
+-- call. read_context widens that to any context read (orient tools, get_item,
+-- list_items, search): a session that read something can meaningfully rate it.
+-- impact_reported counts sessions that called record_context_impact;
+-- impact_calls counts the calls themselves (several per session means the
+-- agent reported more than once); reported_without_read counts reporting
+-- sessions that never read any context, whose reports rate nothing.
 -- list_projects / resolve_project are slug lookups, not orientation, so they
 -- do not count here even though ActorStats counts them as orient_calls.
 WITH calls AS (
     SELECT session_id, called_at,
            tool IN ('get_project_context', 'get_global_context') AS is_orient,
+           tool IN ('get_project_context', 'get_global_context', 'get_item', 'list_items', 'search') AS is_read,
            tool IN ('create_item', 'create_items', 'update_item', 'complete_item', 'log_activity',
                     'update_project_summary', 'set_project_instructions', 'create_project',
                     'archive_project', 'link_items', 'unlink_items', 'add_item_ref') AS is_write,
@@ -23,7 +29,8 @@ WITH calls AS (
     SELECT session_id,
            min(called_at) FILTER (WHERE is_orient) AS first_orient,
            min(called_at) FILTER (WHERE is_write)  AS first_write,
-           bool_or(is_impact)                      AS reported_impact,
+           bool_or(is_read)                        AS read_context,
+           count(*) FILTER (WHERE is_impact)       AS impact_calls,
            count(*)                                AS calls
     FROM calls
     GROUP BY session_id
@@ -33,7 +40,10 @@ SELECT count(*)                                                                 
                           AND (first_write IS NULL OR first_orient <= first_write))               AS oriented,
        count(*) FILTER (WHERE first_write IS NOT NULL
                           AND (first_orient IS NULL OR first_orient > first_write))               AS wrote_without_orient,
-       count(*) FILTER (WHERE reported_impact)                                                    AS impact_reported,
+       count(*) FILTER (WHERE read_context)                                                       AS read_context,
+       count(*) FILTER (WHERE impact_calls > 0)                                                   AS impact_reported,
+       count(*) FILTER (WHERE impact_calls > 0 AND NOT read_context)                              AS reported_without_read,
+       COALESCE(sum(impact_calls), 0)::bigint                                                     AS impact_calls,
        COALESCE(avg(calls), 0)::float8                                                            AS avg_calls
 FROM per_session;
 

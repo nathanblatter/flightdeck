@@ -622,17 +622,25 @@ type ToolError struct {
 // SessionUsage groups MCP tool calls by transport session. Oriented sessions
 // called get_project_context / get_global_context before (or without) any
 // write; WroteWithoutOrient sessions wrote first. REST calls carry no session
-// and are excluded. ImpactReported counts sessions that called
-// record_context_impact.
+// and are excluded. ReadContext is the wider set that read anything (orient
+// tools, get_item, list_items, search). ImpactReported counts sessions that
+// called record_context_impact; ImpactCalls counts the calls, so a gap between
+// the two is sessions reporting more than once.
 type SessionUsage struct {
-	Sessions           int     `json:"sessions"`
-	Oriented           int     `json:"oriented"`
-	WroteWithoutOrient int     `json:"wrote_without_orient"`
-	ImpactReported     int     `json:"impact_reported"`
-	OrientRate         float64 `json:"orient_rate"`
-	// ImpactCoverage is impact_reported / oriented: how much of the context
-	// that was actually read got an outcome reported. Low coverage means the
-	// context_effectiveness block rests on a thin sample.
+	Sessions           int `json:"sessions"`
+	Oriented           int `json:"oriented"`
+	WroteWithoutOrient int `json:"wrote_without_orient"`
+	ReadContext        int `json:"read_context"`
+	ImpactReported     int `json:"impact_reported"`
+	// ReportedWithoutRead is reporting sessions that never read any context:
+	// their report rates nothing and is excluded from ImpactCoverage.
+	ReportedWithoutRead int     `json:"reported_without_read"`
+	ImpactCalls         int     `json:"impact_calls"`
+	OrientRate          float64 `json:"orient_rate"`
+	// ImpactCoverage is (impact_reported - reported_without_read) / read_context:
+	// of the sessions that read context, how many reported an outcome. Bounded
+	// to [0,1] by construction. Low coverage means the context_effectiveness
+	// block rests on a thin sample.
 	ImpactCoverage float64 `json:"impact_coverage"`
 	AvgCalls       float64 `json:"avg_calls"`
 }

@@ -153,6 +153,11 @@ func TestSessionClassification(t *testing.T) {
 	rec("s-impact", "get_project_context")
 	rec("s-impact", "update_item")
 	rec("s-impact", "record_context_impact")
+	// A second report on the same session is one reporting session, two calls.
+	rec("s-impact", "record_context_impact")
+	// Reports without reading any context count as reported but not covered.
+	rec("s-blind-report", "create_item")
+	rec("s-blind-report", "record_context_impact")
 	// REST rows carry no session and must not be a session of their own.
 	rec("", "update_item")
 	rec("", "get_project_context")
@@ -162,7 +167,14 @@ func TestSessionClassification(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := rep.Sessions
-	want := dto.SessionUsage{Sessions: 7, Oriented: 4, WroteWithoutOrient: 3, ImpactReported: 1, OrientRate: 4.0 / 7, ImpactCoverage: 1.0 / 4, AvgCalls: 14.0 / 7}
+	// read_context = s-orient, s-write, s-global, s-read, s-impact (s-list's
+	// list_projects is a slug lookup, s-blind* never read). Coverage is the
+	// one reporting session that read context over those five: never > 1.
+	want := dto.SessionUsage{
+		Sessions: 8, Oriented: 4, WroteWithoutOrient: 4, ReadContext: 5,
+		ImpactReported: 2, ReportedWithoutRead: 1, ImpactCalls: 3,
+		OrientRate: 4.0 / 8, ImpactCoverage: 1.0 / 5, AvgCalls: 17.0 / 8,
+	}
 	if got != want {
 		t.Fatalf("sessions = %+v, want %+v", got, want)
 	}
