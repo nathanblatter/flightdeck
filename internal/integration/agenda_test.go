@@ -131,7 +131,7 @@ func TestAgendaSplitsAndFlagsExpired(t *testing.T) {
 	}
 
 	// The global map leads with the agenda.
-	g, err := svc.GlobalContext(ctx, service.VerbosityCompact)
+	g, err := svc.GlobalContext(ctx, service.VerbosityCompact, "")
 	if err != nil {
 		t.Fatalf("global: %v", err)
 	}

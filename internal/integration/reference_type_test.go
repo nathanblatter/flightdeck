@@ -115,7 +115,7 @@ func TestReferenceType(t *testing.T) {
 	}
 
 	// Global orient: top_items and counts skip references too.
-	global, err := svc.GlobalContext(ctx, service.VerbosityCompact)
+	global, err := svc.GlobalContext(ctx, service.VerbosityCompact, "")
 	if err != nil {
 		t.Fatalf("global context: %v", err)
 	}
