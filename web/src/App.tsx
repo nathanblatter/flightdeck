@@ -19,8 +19,9 @@ import { ProjectDrawer } from "./components/ProjectDrawer";
 import { QuickAdd } from "./components/QuickAdd";
 import { NewProject } from "./components/NewProject";
 import { ItemLinksModal } from "./components/ItemLinks";
+import { AgendaView } from "./components/Agenda";
 
-type View = "board" | "activity";
+type View = "board" | "agenda" | "activity";
 
 export function App() {
   const [hasKey, setHasKey] = useState(!!getApiKey());
@@ -235,6 +236,12 @@ function Dashboard({
             Board
           </button>
           <button
+            className={view === "agenda" ? "active" : ""}
+            onClick={() => setView("agenda")}
+          >
+            Agenda
+          </button>
+          <button
             className={view === "activity" ? "active" : ""}
             onClick={() => setView("activity")}
           >
@@ -358,6 +365,13 @@ function Dashboard({
           <Board
             items={items}
             projects={projectById}
+            onOpenProject={setDrawerSlug}
+            onOpenItem={setLinksItem}
+          />
+        ) : view === "agenda" ? (
+          <AgendaView
+            projects={projects}
+            projectFilter={projectFilter || undefined}
             onOpenProject={setDrawerSlug}
             onOpenItem={setLinksItem}
           />

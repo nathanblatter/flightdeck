@@ -171,7 +171,7 @@ func addTool[In, Out any](h *handlers, s *mcpsdk.Server, t *mcpsdk.Tool, fn func
 const Instructions = "Orient before your first write: get_project_context(slug) for the project you're in (get_global_context across projects, list_projects to find a slug). " +
 	"Flightdeck is the shared memory for projects: what each one is, what's open, what was decided and why. " +
 	"Keep it fresh as you work: create_item for new tasks/bugs/ideas, update_item to move status, log_activity for decisions and progress — capture the why. " +
-	"Search before filing what may exist. " +
+	"Search before filing what may exist. Date-bound work gets due_at (get_agenda shows what's due). " +
 	"Before you finish, call record_context_impact once: did the context help, hurt, or neither? neutral is valid; session_id defaults to this session."
 
 // NewHandler builds the MCP server, registers all tools, and returns an
@@ -262,6 +262,13 @@ func (h *handlers) usageMiddleware(next mcpsdk.MethodHandler) mcpsdk.MethodHandl
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func deref(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
 
 func optStr(p *string) *string {
 	if p == nil || *p == "" {
@@ -359,6 +366,7 @@ type listItemsIn struct {
 	Assignee     *string `json:"assignee,omitempty"`
 	Tag          *string `json:"tag,omitempty" jsonschema:"single tag to filter by"`
 	UpdatedSince *string `json:"updated_since,omitempty" jsonschema:"RFC3339 timestamp"`
+	DueBefore    *string `json:"due_before,omitempty" jsonschema:"only dated items due on or before this (RFC3339 or YYYY-MM-DD)"`
 	Limit        *int    `json:"limit,omitempty" jsonschema:"page size (default 50, max 500)"`
 	Cursor       *int    `json:"cursor,omitempty" jsonschema:"offset cursor from a prior page's next_offset"`
 	Verbosity    *string `json:"verbosity,omitempty" jsonschema:"compact (default; bodies truncated) | full"`
@@ -385,6 +393,7 @@ type createItemIn struct {
 	Metadata           map[string]any `json:"metadata,omitempty"`
 	IdempotencyKey     *string        `json:"idempotency_key,omitempty" jsonschema:"supply a stable key to make creation safe to retry — a prior item with the same key is returned instead of duplicated"`
 	AcceptanceCriteria []criterionIn  `json:"acceptance_criteria,omitempty" jsonschema:"definition-of-done checklist: the contract to satisfy before marking done"`
+	DueAt              *string        `json:"due_at,omitempty" jsonschema:"when this must be done: RFC3339 or YYYY-MM-DD (a bare date means end of that day); dated items appear on get_agenda"`
 }
 
 type updateItemIn struct {
@@ -399,7 +408,12 @@ type updateItemIn struct {
 	Position           *float64       `json:"position,omitempty"`
 	Metadata           map[string]any `json:"metadata,omitempty"`
 	AcceptanceCriteria []criterionIn  `json:"acceptance_criteria,omitempty" jsonschema:"replace the definition-of-done checklist (e.g. to tick criteria done)"`
+	DueAt              *string        `json:"due_at,omitempty" jsonschema:"RFC3339 or YYYY-MM-DD; an empty string clears the due date"`
 	ExpectedVersion    *int           `json:"expected_version,omitempty" jsonschema:"optimistic lock: the version you read; the update is rejected with a conflict if the item changed since"`
+}
+
+type agendaIn struct {
+	Days *int `json:"days,omitempty" jsonschema:"horizon in days (default 7, max 90)"`
 }
 
 type createItemsIn struct {
@@ -517,8 +531,13 @@ func (h *handlers) register(s *mcpsdk.Server) {
 
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "get_global_context",
-		Description: "Horizontal 'load the map' view across all active projects (summary + counts + top items).",
+		Description: "Horizontal 'load the map' view across all active projects: opens with the 7-day agenda (overdue + upcoming dated items), then each project's summary, counts and top items.",
 	}, h.getGlobalContext)
+
+	addTool(h, s, &mcpsdk.Tool{
+		Name:        "get_agenda",
+		Description: "What is due: dated open items across active projects, overdue first (oldest first), then due within `days` (default 7, max 90); expired = overdue with no activity since the due date. Use it for 'what's due this week' and for weekly reviews.",
+	}, h.getAgenda)
 
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "search",
@@ -657,6 +676,14 @@ func (h *handlers) getProjectContext(ctx context.Context, _ *mcpsdk.CallToolRequ
 	return bundle, nil
 }
 
+func (h *handlers) getAgenda(ctx context.Context, _ *mcpsdk.CallToolRequest, in agendaIn) (dto.Agenda, error) {
+	days := 0
+	if in.Days != nil {
+		days = *in.Days
+	}
+	return h.svc.Agenda(ctx, days)
+}
+
 func (h *handlers) getGlobalContext(ctx context.Context, _ *mcpsdk.CallToolRequest, in globalIn) (dto.GlobalContext, error) {
 	bundle, err := h.svc.GlobalContext(ctx, verbosityOf(in.Verbosity))
 	if err != nil {
@@ -711,6 +738,14 @@ func (h *handlers) listItems(ctx context.Context, _ *mcpsdk.CallToolRequest, in 
 		}
 		since = &t
 	}
+	var dueBefore *time.Time
+	if in.DueBefore != nil && *in.DueBefore != "" {
+		t, err := service.ParseDue(*in.DueBefore)
+		if err != nil {
+			return dto.ItemsPage{}, fmt.Errorf("invalid due_before: %w", err)
+		}
+		dueBefore = t
+	}
 	// Page size (default 50, max 500) and offset cursor. Fetch one extra row to
 	// detect whether a further page exists.
 	limit := 50
@@ -733,6 +768,7 @@ func (h *handlers) listItems(ctx context.Context, _ *mcpsdk.CallToolRequest, in 
 		Assignee:     optStr(in.Assignee),
 		Tag:          optStr(in.Tag),
 		UpdatedSince: since,
+		DueBefore:    dueBefore,
 		Lim:          &fetch,
 		Off:          &off,
 	})
@@ -779,6 +815,10 @@ func (h *handlers) createItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if err != nil {
 		return dto.Item{}, err
 	}
+	dueAt, err := service.ParseDue(deref(in.DueAt))
+	if err != nil {
+		return dto.Item{}, err
+	}
 	source := "agent"
 	item, err := h.svc.CreateItem(ctx, store.CreateItemParams{
 		ProjectID:          projectID,
@@ -792,6 +832,7 @@ func (h *handlers) createItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		Metadata:           metaJSON(in.Metadata),
 		IdempotencyKey:     optStr(in.IdempotencyKey),
 		AcceptanceCriteria: criteriaJSON(in.AcceptanceCriteria),
+		DueAt:              dueAt,
 	}, auth.Actor(ctx))
 	if err != nil {
 		return dto.Item{}, err
@@ -813,6 +854,10 @@ func (h *handlers) createItems(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 		if err != nil {
 			return createItemsOut{}, err
 		}
+		dueAt, err := service.ParseDue(deref(it.DueAt))
+		if err != nil {
+			return createItemsOut{}, err
+		}
 		params = append(params, store.CreateItemParams{
 			ProjectID:          projectID,
 			Type:               optStr(it.Type),
@@ -825,6 +870,7 @@ func (h *handlers) createItems(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 			Metadata:           metaJSON(it.Metadata),
 			IdempotencyKey:     optStr(it.IdempotencyKey),
 			AcceptanceCriteria: criteriaJSON(it.AcceptanceCriteria),
+			DueAt:              dueAt,
 		})
 	}
 	created, err := h.svc.BulkCreateItems(ctx, params, auth.Actor(ctx))
@@ -847,6 +893,16 @@ func (h *handlers) updateItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		v := int32(*in.ExpectedVersion)
 		expectedVersion = &v
 	}
+	// due_at: absent leaves it, "" clears it, a value replaces it.
+	var dueAt *time.Time
+	clearDue := false
+	if in.DueAt != nil {
+		if *in.DueAt == "" {
+			clearDue = true
+		} else if dueAt, err = service.ParseDue(*in.DueAt); err != nil {
+			return dto.Item{}, err
+		}
+	}
 	item, err := h.svc.UpdateItem(ctx, store.UpdateItemParams{
 		ID:       id,
 		Title:    optStr(in.Title),
@@ -862,6 +918,8 @@ func (h *handlers) updateItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		Metadata:           metaJSON(in.Metadata),
 		AcceptanceCriteria: criteriaJSON(in.AcceptanceCriteria),
 		ExpectedVersion:    expectedVersion,
+		DueAt:              dueAt,
+		ClearDueAt:         clearDue,
 	}, auth.Actor(ctx))
 	if err != nil {
 		return dto.Item{}, err

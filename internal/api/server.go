@@ -93,6 +93,7 @@ func (s *Server) Routes() http.Handler {
 	// context (orient)
 	mux.Handle("GET /context", read(s.globalContext))
 	mux.Handle("GET /context/{slug}", read(s.projectContext))
+	mux.Handle("GET /agenda", read(s.agenda))
 
 	// agent decision helpers
 	mux.Handle("GET /next-action", read(s.nextAction))

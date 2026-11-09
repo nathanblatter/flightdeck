@@ -357,6 +357,7 @@ func orientHints(openItems []dto.Item, sinceSummary int) (readyNext []dto.ItemBr
 	if sinceSummary >= 10 {
 		nudges = append(nudges, fmt.Sprintf("summary may be stale: %d activities since it was last refreshed — consider update_project_summary", sinceSummary))
 	}
+	nudges = append(nudges, dueNudges(openItems, time.Now())...)
 	return readyNext, nudges
 }
 
@@ -406,6 +407,15 @@ func (s *Service) buildGlobalContext(ctx context.Context, v Verbosity, key strin
 		topByProject[r.ProjectID] = append(topByProject[r.ProjectID], dto.ToItemBrief(dto.TopOpenRowToItem(r, 0)))
 	}
 	out := dto.GlobalContext{Projects: make([]dto.ProjectOverview, 0, len(projects))}
+	// The agenda leads the map, but only when something is dated — an empty
+	// block would tax every orient on an instance that never uses due dates.
+	agenda, err := s.Agenda(ctx, agendaDefaultDays)
+	if err != nil {
+		return dto.GlobalContext{}, err
+	}
+	if len(agenda.Overdue)+len(agenda.Upcoming) > 0 {
+		out.Agenda = &agenda
+	}
 	for _, p := range projects {
 		proj := dto.ToProject(p)
 		if v == VerbosityCompact {

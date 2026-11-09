@@ -93,6 +93,8 @@ export interface Item {
   created_at: string;
   updated_at: string;
   closed_at?: string;
+  // Optional due date (RFC3339). Dated items feed the Agenda view.
+  due_at?: string;
   version: number;
   // Set on list/context responses when an open item with a `blocks` link
   // points at this one; blocked_by carries the blocker titles.
@@ -138,6 +140,30 @@ export interface ItemBrief {
   status: ItemStatus;
   priority: Priority;
   type: ItemType;
+  due_at?: string;
+}
+
+// One dated open item on the cross-project agenda (GET /api/agenda).
+export interface AgendaEntry {
+  ref: string;
+  project: string; // slug
+  title: string;
+  status: ItemStatus;
+  priority: Priority;
+  type: ItemType;
+  due_at: string;
+  overdue?: boolean;
+  last_activity_at: string;
+  // Overdue with no activity since the due date: needs closing or re-dating.
+  expired?: boolean;
+}
+
+export interface Agenda {
+  days: number;
+  now: string;
+  overdue: AgendaEntry[];
+  upcoming: AgendaEntry[];
+  nudges?: string[];
 }
 
 export interface Activity {
@@ -242,6 +268,8 @@ export interface ItemFilters {
   type?: string;
   tag?: string;
   q?: string;
+  // RFC3339 or YYYY-MM-DD: only dated items due on or before this.
+  due_before?: string;
 }
 
 // --- first-run setup (see internal/api/setup.go) ---
@@ -315,9 +343,14 @@ export const api = {
     body?: string;
     priority?: string;
     tags?: string[];
+    // RFC3339 or YYYY-MM-DD (a bare date means end of that day).
+    due_at?: string;
   }) => req<Item>("POST", "/items", body),
-  patchItem: (id: string, body: Partial<Pick<Item, "status" | "priority" | "assignee" | "body" | "title" | "tags" | "position">>) =>
+  // due_at: absent keeps it, "" clears it, a value replaces it.
+  patchItem: (id: string, body: Partial<Pick<Item, "status" | "priority" | "assignee" | "body" | "title" | "tags" | "position" | "due_at">>) =>
     req<Item>("PATCH", `/items/${id}`, body),
+  agenda: (days?: number) =>
+    req<Agenda>("GET", `/agenda${qs({ days: days === undefined ? undefined : String(days) })}`),
   deleteItem: (id: string) => req<void>("DELETE", `/items/${id}`),
   itemLinks: (id: string) => req<ItemLink[]>("GET", `/items/${id}/links`),
   itemAttachments: (id: string) =>

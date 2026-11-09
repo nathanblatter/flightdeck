@@ -20,6 +20,7 @@ export function QuickAdd({
   const [type, setType] = useState("task");
   const [priority, setPriority] = useState("med");
   const [tags, setTags] = useState("");
+  const [dueAt, setDueAt] = useState("");
 
   const create = useMutation({
     mutationFn: () =>
@@ -32,6 +33,8 @@ export function QuickAdd({
           .split(",")
           .map((t) => t.trim())
           .filter(Boolean),
+        // YYYY-MM-DD from the date input; the server reads it as end of day.
+        due_at: dueAt || undefined,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["items"] });
@@ -77,6 +80,12 @@ export function QuickAdd({
         placeholder="tags (comma sep)"
         value={tags}
         onChange={(e) => setTags(e.target.value)}
+      />
+      <input
+        type="date"
+        title="Due date (optional)"
+        value={dueAt}
+        onChange={(e) => setDueAt(e.target.value)}
       />
       <button className="btn primary" disabled={!title.trim() || create.isPending}>
         {create.isPending ? "Adding…" : "Add"}

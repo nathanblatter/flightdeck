@@ -1,5 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { COLUMNS, PRIORITY_COLOR, PRIORITY_RANK, projectColor, projectTreeOrder, relativeTime, updateNotice } from "./lib";
+import { COLUMNS, PRIORITY_COLOR, PRIORITY_RANK, formatDue, isOverdue, projectColor, projectTreeOrder, relativeTime, updateNotice } from "./lib";
+
+describe("formatDue", () => {
+  const now = new Date(2026, 10, 9, 12, 0, 0); // Nov 9 2026, local
+  it("says due today for the same calendar day", () => {
+    expect(formatDue(new Date(2026, 10, 9, 23, 59).toISOString(), now)).toBe("due today");
+    expect(isOverdue(new Date(2026, 10, 9, 1, 0).toISOString(), now)).toBe(false);
+  });
+  it("phrases a future date as due", () => {
+    expect(formatDue(new Date(2026, 10, 28, 23, 59).toISOString(), now)).toBe("due Nov 28");
+    expect(isOverdue(new Date(2026, 10, 28).toISOString(), now)).toBe(false);
+  });
+  it("phrases a past date as overdue", () => {
+    expect(formatDue(new Date(2026, 10, 1, 23, 59).toISOString(), now)).toBe("overdue Nov 1");
+    expect(isOverdue(new Date(2026, 10, 1).toISOString(), now)).toBe(true);
+  });
+});
 
 describe("COLUMNS", () => {
   it("keeps board order and omits wontfix", () => {

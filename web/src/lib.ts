@@ -38,6 +38,29 @@ export function projectColor(slug: string): string {
   return `hsl(${h} 65% 45%)`;
 }
 
+// formatDue phrases a due date for a card badge: "due today", "due Nov 28",
+// or "overdue Nov 28" once the date has passed. Day granularity in the
+// viewer's local zone, since due dates are calendar facts, not instants.
+export function formatDue(iso: string, now: Date = new Date()): string {
+  const due = new Date(iso);
+  const sameDay =
+    due.getFullYear() === now.getFullYear() &&
+    due.getMonth() === now.getMonth() &&
+    due.getDate() === now.getDate();
+  if (sameDay) return "due today";
+  const label = due.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return due.getTime() < now.getTime() ? `overdue ${label}` : `due ${label}`;
+}
+
+export function isOverdue(iso: string, now: Date = new Date()): boolean {
+  const due = new Date(iso);
+  const sameDay =
+    due.getFullYear() === now.getFullYear() &&
+    due.getMonth() === now.getMonth() &&
+    due.getDate() === now.getDate();
+  return !sameDay && due.getTime() < now.getTime();
+}
+
 export function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
   const diff = Date.now() - then;

@@ -18,7 +18,7 @@ VALUES ($1, $2, $3, $4, $5, $6, COALESCE(sqlc.narg('args')::jsonb, '{}'), $7, $8
 WITH calls AS (
     SELECT session_id, called_at,
            tool IN ('get_project_context', 'get_global_context') AS is_orient,
-           tool IN ('get_project_context', 'get_global_context', 'get_item', 'list_items', 'search') AS is_read,
+           tool IN ('get_project_context', 'get_global_context', 'get_agenda', 'get_item', 'list_items', 'search') AS is_read,
            tool IN ('create_item', 'create_items', 'update_item', 'complete_item', 'log_activity',
                     'update_project_summary', 'set_project_instructions', 'create_project',
                     'archive_project', 'link_items', 'unlink_items', 'add_item_ref') AS is_write,
@@ -71,7 +71,7 @@ ORDER BY calls DESC;
 SELECT actor,
        count(*)                                                            AS calls,
        count(*) FILTER (WHERE NOT ok)                                      AS errors,
-       count(*) FILTER (WHERE tool IN ('get_project_context', 'get_global_context', 'list_projects', 'resolve_project')) AS orient_calls,
+       count(*) FILTER (WHERE tool IN ('get_project_context', 'get_global_context', 'get_agenda', 'list_projects', 'resolve_project')) AS orient_calls,
        count(*) FILTER (WHERE tool IN ('create_item', 'create_items', 'update_item', 'complete_item', 'log_activity',
                                        'update_project_summary', 'set_project_instructions', 'create_project',
                                        'archive_project', 'link_items', 'unlink_items', 'add_item_ref'))      AS write_calls,
