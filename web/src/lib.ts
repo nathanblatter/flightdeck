@@ -29,6 +29,7 @@ export const TYPE_GLYPH: Record<string, string> = {
   bug: "🐞",
   idea: "💡",
   note: "✎",
+  reference: "📘",
 };
 
 // Deterministic, pleasant color per project slug (stable across reloads).

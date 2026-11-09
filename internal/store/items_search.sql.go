@@ -40,6 +40,7 @@ SELECT id, project_id, type, title, body, status, priority, assignee, position, 
     FROM items i
     JOIN projects p ON p.id = i.project_id AND p.status = 'active'
     WHERE i.deleted_at IS NULL AND i.status NOT IN ('done', 'wontfix')
+      AND i.type <> 'reference'
 ) s
 WHERE s.rn <= $1::int
 ORDER BY s.project_slug, s.rn

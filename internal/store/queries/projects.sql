@@ -75,9 +75,11 @@ WHERE slug = $1
 RETURNING *;
 
 -- name: CountItemsByStatus :many
+-- Reference items are facts, not work: they never count toward a project's
+-- backlog (flightdeck-93).
 SELECT project_id, status, count(*) AS n
 FROM items
-WHERE deleted_at IS NULL
+WHERE deleted_at IS NULL AND type <> 'reference'
 GROUP BY project_id, status;
 
 -- name: CountItemsByStatusForProject :many
@@ -85,7 +87,7 @@ GROUP BY project_id, status;
 -- a single-project orient.
 SELECT status, count(*) AS n
 FROM items
-WHERE project_id = $1 AND deleted_at IS NULL
+WHERE project_id = $1 AND deleted_at IS NULL AND type <> 'reference'
 GROUP BY status;
 
 -- name: DeleteProject :one

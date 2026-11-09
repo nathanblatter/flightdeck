@@ -236,6 +236,7 @@ func (s *Service) buildProjectContext(ctx context.Context, slug string, v Verbos
 		return dto.ProjectContext{}, err
 	}
 	itemMax, actMax := bodyLimits(v)
+	refMax := referenceBodyLimit(v)
 	openLimit, recentLimit := int32(50), int32(15)
 	if v == VerbosityCompact {
 		// Orient is paid in tokens on every session start; the compact bundle
@@ -246,6 +247,7 @@ func (s *Service) buildProjectContext(ctx context.Context, slug string, v Verbos
 
 	var (
 		open         []store.Item
+		reference    []store.Item
 		recent       []store.Activity
 		counts       []store.CountItemsByStatusForProjectRow
 		edges        []store.ListBlockingEdgesByProjectRow
@@ -256,6 +258,10 @@ func (s *Service) buildProjectContext(ctx context.Context, slug string, v Verbos
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
 		open, err = s.St.ListOpenItemsByProject(gctx, store.ListOpenItemsByProjectParams{ProjectID: p.ID, Limit: openLimit})
+		return
+	})
+	g.Go(func() (err error) {
+		reference, err = s.St.ListReferenceItemsByProject(gctx, store.ListReferenceItemsByProjectParams{ProjectID: p.ID, Limit: referenceLimit})
 		return
 	})
 	g.Go(func() (err error) {
@@ -317,6 +323,7 @@ func (s *Service) buildProjectContext(ctx context.Context, slug string, v Verbos
 		RecentActivity:         dto.ToActivitiesTrunc(recent, actMax),
 		Counts:                 countMap,
 		ReadyNext:              readyNext,
+		Reference:              dto.ToReferenceBriefs(reference, refMax),
 		Nudges:                 nudges,
 		RejectedApproaches:     dto.ToActivitiesTrunc(rejected, actMax),
 		SummaryUpdatedAt:       p.UpdatedAt,
@@ -336,7 +343,21 @@ func (s *Service) buildProjectContext(ctx context.Context, slug string, v Verbos
 const (
 	compactOpenItems      = 25
 	compactRecentActivity = 10
+	// referenceLimit caps the facts block in both verbosities; a project with
+	// more reference items than this is filing work as facts.
+	referenceLimit = 50
+	// compactReferenceBody is the per-fact body cap in compact orient — a bit
+	// under the open-item cap, since facts are read in aggregate and get_item
+	// has the rest.
+	compactReferenceBody = 200
 )
+
+func referenceBodyLimit(v Verbosity) int {
+	if v == VerbosityFull {
+		return 0
+	}
+	return compactReferenceBody
+}
 
 func orientHints(openItems []dto.Item, sinceSummary int) (readyNext []dto.ItemBrief, nudges []string) {
 	const readyLimit = 3

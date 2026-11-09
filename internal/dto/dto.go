@@ -267,6 +267,24 @@ func ToItemBrief(i Item) ItemBrief {
 	return ItemBrief{Ref: i.Ref, Title: i.Title, Status: i.Status, Priority: i.Priority, Type: i.Type, DueAt: i.DueAt}
 }
 
+// ReferenceBrief is a type=reference item as the orient bundle carries it: the
+// fact itself (ref, title, body) with none of the work fields — status and
+// priority mean nothing for a spec or an account number. Body is truncated in
+// compact verbosity (get_item for the rest), full otherwise.
+type ReferenceBrief struct {
+	Ref   string `json:"ref"`
+	Title string `json:"title"`
+	Body  string `json:"body,omitempty"`
+}
+
+func ToReferenceBriefs(items []store.Item, maxBody int) []ReferenceBrief {
+	out := make([]ReferenceBrief, len(items))
+	for i, it := range items {
+		out[i] = ReferenceBrief{Ref: it.Ref, Title: it.Title, Body: trunc(it.Body, maxBody)}
+	}
+	return out
+}
+
 type Activity struct {
 	ID         string         `json:"id"`
 	ProjectID  string         `json:"project_id"`
@@ -413,6 +431,11 @@ type ProjectContext struct {
 	// briefs (ref+title) to avoid duplicating full item bodies already in
 	// open_items.
 	ReadyNext []ItemBrief `json:"ready_next,omitempty"`
+	// Reference holds the project's durable facts (type=reference items:
+	// specs, account/vehicle details, dossiers). They are excluded from
+	// open_items, counts and ready_next — facts are not work — but an agent
+	// needs them on orient, so they ride along here.
+	Reference []ReferenceBrief `json:"reference,omitempty"`
 	// Nudges are short housekeeping prompts (stale in-progress work, a summary
 	// that's drifted) — making the cost of NOT logging visible on every orient.
 	Nudges []string `json:"nudges,omitempty"`

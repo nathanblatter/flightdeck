@@ -167,12 +167,13 @@ func addTool[In, Out any](h *handlers, s *mcpsdk.Server, t *mcpsdk.Tool, fn func
 // Instructions is the client-agnostic agent contract, sent in the initialize
 // response so every MCP client — not only one with a hand-written CLAUDE.md —
 // learns the orient → work → log loop that keeps the store fresh. Kept under
-// 600 characters: it rides on every session start.
+// 700 characters: it rides on every session start.
 const Instructions = "Orient before your first write: get_project_context(slug) for the project you're in (get_global_context across projects, list_projects to find a slug). " +
 	"Flightdeck is the shared memory for projects: what each one is, what's open, what was decided and why. " +
 	"Keep it fresh as you work: create_item for new tasks/bugs/ideas, update_item to move status, log_activity for decisions and progress — capture the why. " +
 	"Search before filing what may exist. Date-bound work gets due_at (get_agenda shows what's due). " +
-	"Before you finish, call record_context_impact once: did the context help, hurt, or neither? neutral is valid; session_id defaults to this session."
+	"Before you finish, call record_context_impact once: did the context help, hurt, or neither? neutral is valid; session_id defaults to this session. " +
+	"Facts go in a reference item (type=reference), not the summary; summaries describe state."
 
 // NewHandler builds the MCP server, registers all tools, and returns an
 // http.Handler serving the streamable-HTTP transport (mount it at /mcp).
@@ -354,7 +355,7 @@ type globalIn struct {
 type searchIn struct {
 	Query     string  `json:"query" jsonschema:"full-text query over items and activity"`
 	Project   *string `json:"project,omitempty" jsonschema:"limit to a project slug"`
-	Type      *string `json:"type,omitempty" jsonschema:"limit items to a type: task|bug|idea|note"`
+	Type      *string `json:"type,omitempty" jsonschema:"limit items to a type: task|bug|idea|note|reference"`
 	Limit     *int    `json:"limit,omitempty" jsonschema:"max item matches (default 25)"`
 	Verbosity *string `json:"verbosity,omitempty" jsonschema:"compact (default) | full"`
 }
@@ -362,7 +363,7 @@ type searchIn struct {
 type listItemsIn struct {
 	Project      *string `json:"project,omitempty" jsonschema:"project slug"`
 	Status       *string `json:"status,omitempty" jsonschema:"backlog|todo|in_progress|blocked|done|wontfix"`
-	Type         *string `json:"type,omitempty" jsonschema:"task|bug|idea|note"`
+	Type         *string `json:"type,omitempty" jsonschema:"task|bug|idea|note|reference"`
 	Assignee     *string `json:"assignee,omitempty"`
 	Tag          *string `json:"tag,omitempty" jsonschema:"single tag to filter by"`
 	UpdatedSince *string `json:"updated_since,omitempty" jsonschema:"RFC3339 timestamp"`
@@ -384,7 +385,7 @@ type criterionIn struct {
 
 type createItemIn struct {
 	Project            string         `json:"project" jsonschema:"project slug to create the item under"`
-	Type               *string        `json:"type,omitempty" jsonschema:"task|bug|idea|note (default task)"`
+	Type               *string        `json:"type,omitempty" jsonschema:"task|bug|idea|note|reference (default task; reference = durable facts (specs, account/vehicle details, dossiers), not work)"`
 	Title              string         `json:"title"`
 	Body               *string        `json:"body,omitempty"`
 	Priority           *string        `json:"priority,omitempty" jsonschema:"low|med|high|urgent (default med)"`
@@ -399,7 +400,7 @@ type createItemIn struct {
 type updateItemIn struct {
 	ID                 string         `json:"id" jsonschema:"item UUID or short ref (e.g. finforge-42)"`
 	Title              *string        `json:"title,omitempty" jsonschema:"new title (e.g. to fix a typo)"`
-	Type               *string        `json:"type,omitempty" jsonschema:"reclassify: task|bug|idea|note"`
+	Type               *string        `json:"type,omitempty" jsonschema:"reclassify: task|bug|idea|note|reference (reference = durable facts, not work)"`
 	Status             *string        `json:"status,omitempty"`
 	Priority           *string        `json:"priority,omitempty"`
 	Assignee           *string        `json:"assignee,omitempty" jsonschema:"empty string clears the assignee"`
@@ -526,7 +527,7 @@ func (h *handlers) register(s *mcpsdk.Server) {
 
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "get_project_context",
-		Description: "Primary orient call: a project's summary, open items, recent decisions, and status counts.",
+		Description: "Primary orient call: a project's summary, open items, recent decisions, status counts, and reference facts (type=reference items, excluded from the work lists).",
 	}, h.getProjectContext)
 
 	addTool(h, s, &mcpsdk.Tool{
@@ -556,17 +557,17 @@ func (h *handlers) register(s *mcpsdk.Server) {
 
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "create_item",
-		Description: "Create an item (task/bug/idea/note) under a project. Also appends a 'created' activity.",
+		Description: "Create an item (task/bug/idea/note/reference) under a project. reference = durable facts (specs, account/vehicle details, dossiers), not work: excluded from counts and open items, surfaced in get_project_context.reference and search. Also appends a 'created' activity.",
 	}, h.createItem)
 
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "create_items",
-		Description: "Create several items in one call (e.g. file a batch of tasks). Each gets its own 'created' activity and event.",
+		Description: "Create several items in one call (e.g. file a batch of tasks). Types: task|bug|idea|note|reference (reference = durable facts, not work). Each gets its own 'created' activity and event.",
 	}, h.createItems)
 
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "update_item",
-		Description: "Update an item. A status change automatically appends a 'status_change' activity.",
+		Description: "Update an item (type=reference reclassifies it as a durable fact, not work). A status change automatically appends a 'status_change' activity.",
 	}, h.updateItem)
 
 	addTool(h, s, &mcpsdk.Tool{

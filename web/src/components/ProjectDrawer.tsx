@@ -220,6 +220,26 @@ export function ProjectDrawer({
               </ul>
             </section>
 
+            {data.reference && data.reference.length > 0 && (
+              <section>
+                <h3 className="section-title">
+                  Reference <span className="muted">({data.reference.length})</span>
+                </h3>
+                <ul className="drawer-list">
+                  {data.reference.map((r) => (
+                    <li key={r.ref} className="col">
+                      <span>
+                        <span className="glyph">{TYPE_GLYPH.reference}</span>
+                        <span className="mono muted nowrap">{r.ref}</span>{" "}
+                        <span>{r.title}</span>
+                      </span>
+                      {r.body && <span className="muted sm">{r.body}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
             <section>
               <h3 className="section-title">Recent activity</h3>
               <ul className="drawer-list">

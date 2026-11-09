@@ -381,6 +381,7 @@ func (q *Queries) ListItems(ctx context.Context, arg ListItemsParams) ([]Item, e
 const listOpenItemsByProject = `-- name: ListOpenItemsByProject :many
 SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at FROM items
 WHERE project_id = $1 AND deleted_at IS NULL AND status NOT IN ('done', 'wontfix')
+  AND type <> 'reference'
 ORDER BY
     CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'med' THEN 2 ELSE 3 END,
     position ASC
@@ -392,6 +393,8 @@ type ListOpenItemsByProjectParams struct {
 	Limit     int32     `json:"limit"`
 }
 
+// Reference items are facts, not work — they live in their own orient block
+// (ListReferenceItemsByProject), never in open_items.
 func (q *Queries) ListOpenItemsByProject(ctx context.Context, arg ListOpenItemsByProjectParams) ([]Item, error) {
 	rows, err := q.db.Query(ctx, listOpenItemsByProject, arg.ProjectID, arg.Limit)
 	if err != nil {
@@ -428,6 +431,67 @@ func (q *Queries) ListOpenItemsByProject(ctx context.Context, arg ListOpenItemsB
 			&i.Embedding,
 			&i.EmbeddingModel,
 			&i.DueAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReferenceItemsByProject = `-- name: ListReferenceItemsByProject :many
+SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model FROM items
+WHERE project_id = $1 AND deleted_at IS NULL AND type = 'reference'
+ORDER BY position ASC, title ASC
+LIMIT $2
+`
+
+type ListReferenceItemsByProjectParams struct {
+	ProjectID uuid.UUID `json:"project_id"`
+	Limit     int32     `json:"limit"`
+}
+
+// The project's durable facts (type=reference) for the orient bundle, in the
+// order the kanban shows them. Status is ignored: a fact is a fact wherever
+// its card sits.
+func (q *Queries) ListReferenceItemsByProject(ctx context.Context, arg ListReferenceItemsByProjectParams) ([]Item, error) {
+	rows, err := q.db.Query(ctx, listReferenceItemsByProject, arg.ProjectID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Item
+	for rows.Next() {
+		var i Item
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Type,
+			&i.Title,
+			&i.Body,
+			&i.Status,
+			&i.Priority,
+			&i.Assignee,
+			&i.Position,
+			&i.Source,
+			&i.ExternalRef,
+			&i.Tags,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ClosedAt,
+			&i.DeletedAt,
+			&i.Search,
+			&i.IdempotencyKey,
+			&i.AcceptanceCriteria,
+			&i.Seq,
+			&i.Ref,
+			&i.Version,
+			&i.Embedding,
+			&i.EmbeddingModel,
 		); err != nil {
 			return nil, err
 		}

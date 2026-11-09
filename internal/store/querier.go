@@ -29,6 +29,8 @@ type Querier interface {
 	CountActivitySince(ctx context.Context, arg CountActivitySinceParams) (int64, error)
 	CountAttachmentsForItem(ctx context.Context, itemID uuid.UUID) (int64, error)
 	CountDistinctItemsTouchedSince(ctx context.Context, arg CountDistinctItemsTouchedSinceParams) (int64, error)
+	// Reference items are facts, not work: they never count toward a project's
+	// backlog (flightdeck-93).
 	CountItemsByStatus(ctx context.Context) ([]CountItemsByStatusRow, error)
 	// Single-project status counts — avoids the all-projects full scan when serving
 	// a single-project orient.
@@ -138,6 +140,8 @@ type Querier interface {
 	// Every active "blocks" edge across all projects: blocked_id is blocked by an
 	// open blocker. Used to annotate /items list responses with blocked flags.
 	ListOpenBlockingEdges(ctx context.Context) ([]ListOpenBlockingEdgesRow, error)
+	// Reference items are facts, not work — they live in their own orient block
+	// (ListReferenceItemsByProject), never in open_items.
 	ListOpenItemsByProject(ctx context.Context, arg ListOpenItemsByProjectParams) ([]Item, error)
 	ListProjectShares(ctx context.Context) ([]ProjectShare, error)
 	// Archived projects are excluded unless asked for by name (status='archived').
@@ -152,6 +156,10 @@ type Querier interface {
 	ListReadyItems(ctx context.Context, arg ListReadyItemsParams) ([]ListReadyItemsRow, error)
 	ListRecentActivityByProject(ctx context.Context, arg ListRecentActivityByProjectParams) ([]Activity, error)
 	ListRecentDecisionsByProject(ctx context.Context, arg ListRecentDecisionsByProjectParams) ([]Activity, error)
+	// The project's durable facts (type=reference) for the orient bundle, in the
+	// order the kanban shows them. Status is ignored: a fact is a fact wherever
+	// its card sits.
+	ListReferenceItemsByProject(ctx context.Context, arg ListReferenceItemsByProjectParams) ([]Item, error)
 	ListRejectedByProject(ctx context.Context, arg ListRejectedByProjectParams) ([]Activity, error)
 	ListSettings(ctx context.Context) ([]Setting, error)
 	ListShareStateHashes(ctx context.Context, shareID uuid.UUID) ([]ListShareStateHashesRow, error)

@@ -172,6 +172,7 @@ FROM items i
 JOIN projects p ON p.id = i.project_id AND p.status = 'active'
 WHERE i.deleted_at IS NULL
   AND i.status NOT IN ('done', 'wontfix')
+  AND i.type <> 'reference'
   AND ($1::uuid IS NULL OR i.project_id = $1)
   AND NOT EXISTS (
       SELECT 1 FROM item_links l
