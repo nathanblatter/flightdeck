@@ -69,6 +69,7 @@ export function QuickAdd({
         <option value="bug">bug</option>
         <option value="idea">idea</option>
         <option value="note">note</option>
+        <option value="reference">reference</option>
       </select>
       <select value={priority} onChange={(e) => setPriority(e.target.value)}>
         <option value="low">low</option>

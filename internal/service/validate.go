@@ -10,7 +10,7 @@ import (
 // Validating at the app layer turns bad input into a 400 with a helpful message
 // instead of a 500 from the database CHECK constraint.
 var (
-	ValidItemTypes         = []string{"task", "bug", "idea", "note"}
+	ValidItemTypes         = []string{"task", "bug", "idea", "note", "reference"}
 	ValidItemStatuses      = []string{"backlog", "todo", "in_progress", "blocked", "done", "wontfix"}
 	ValidItemPriorities    = []string{"low", "med", "high", "urgent"}
 	ValidActivityKinds     = []string{"decision", "progress", "status_change", "comment", "created", "rejected"}

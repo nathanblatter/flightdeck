@@ -14,7 +14,7 @@ import (
 const countItemsByStatus = `-- name: CountItemsByStatus :many
 SELECT project_id, status, count(*) AS n
 FROM items
-WHERE deleted_at IS NULL
+WHERE deleted_at IS NULL AND type <> 'reference'
 GROUP BY project_id, status
 `
 
@@ -24,6 +24,8 @@ type CountItemsByStatusRow struct {
 	N         int64     `json:"n"`
 }
 
+// Reference items are facts, not work: they never count toward a project's
+// backlog (flightdeck-93).
 func (q *Queries) CountItemsByStatus(ctx context.Context) ([]CountItemsByStatusRow, error) {
 	rows, err := q.db.Query(ctx, countItemsByStatus)
 	if err != nil {
@@ -47,7 +49,7 @@ func (q *Queries) CountItemsByStatus(ctx context.Context) ([]CountItemsByStatusR
 const countItemsByStatusForProject = `-- name: CountItemsByStatusForProject :many
 SELECT status, count(*) AS n
 FROM items
-WHERE project_id = $1 AND deleted_at IS NULL
+WHERE project_id = $1 AND deleted_at IS NULL AND type <> 'reference'
 GROUP BY status
 `
 

@@ -27,11 +27,23 @@ LIMIT COALESCE(sqlc.narg('lim')::int, 500)
 OFFSET COALESCE(sqlc.narg('off')::int, 0);
 
 -- name: ListOpenItemsByProject :many
+-- Reference items are facts, not work — they live in their own orient block
+-- (ListReferenceItemsByProject), never in open_items.
 SELECT * FROM items
 WHERE project_id = $1 AND deleted_at IS NULL AND status NOT IN ('done', 'wontfix')
+  AND type <> 'reference'
 ORDER BY
     CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'med' THEN 2 ELSE 3 END,
     position ASC
+LIMIT $2;
+
+-- name: ListReferenceItemsByProject :many
+-- The project's durable facts (type=reference) for the orient bundle, in the
+-- order the kanban shows them. Status is ignored: a fact is a fact wherever
+-- its card sits.
+SELECT * FROM items
+WHERE project_id = $1 AND deleted_at IS NULL AND type = 'reference'
+ORDER BY position ASC, title ASC
 LIMIT $2;
 
 -- name: CreateItem :one

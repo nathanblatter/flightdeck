@@ -50,7 +50,7 @@ export type ItemStatus =
   | "blocked"
   | "done"
   | "wontfix";
-export type ItemType = "task" | "bug" | "idea" | "note";
+export type ItemType = "task" | "bug" | "idea" | "note" | "reference";
 export type Priority = "low" | "med" | "high" | "urgent";
 
 export interface Project {
@@ -184,12 +184,21 @@ export interface Activity {
   created_at: string;
 }
 
+export interface ReferenceBrief {
+  ref: string;
+  title: string;
+  body?: string;
+}
+
 export interface ProjectContext {
   project: Project;
   open_items: Item[];
   recent_activity: Activity[];
   counts?: Record<string, number>;
   ready_next?: ItemBrief[];
+  // Durable facts (type=reference items): not work, so absent from
+  // open_items/counts/ready_next; the body is truncated server-side.
+  reference?: ReferenceBrief[];
   nudges?: string[];
   rejected_approaches?: Activity[];
   // Trust signals: when the summary was last written and how much has happened
