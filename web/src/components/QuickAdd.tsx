@@ -21,6 +21,7 @@ export function QuickAdd({
   const [priority, setPriority] = useState("med");
   const [tags, setTags] = useState("");
   const [dueAt, setDueAt] = useState("");
+  const [recur, setRecur] = useState("");
 
   const create = useMutation({
     mutationFn: () =>
@@ -35,6 +36,7 @@ export function QuickAdd({
           .filter(Boolean),
         // YYYY-MM-DD from the date input; the server reads it as end of day.
         due_at: dueAt || undefined,
+        recur: recur.trim() || undefined,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["items"] });
@@ -87,6 +89,12 @@ export function QuickAdd({
         title="Due date (optional)"
         value={dueAt}
         onChange={(e) => setDueAt(e.target.value)}
+      />
+      <input
+        placeholder="recur (P1Y, P6M… or text)"
+        title="Recurrence: an interval like P1Y / P6M / P10D applied to the due date on completion, or free text an agent interprets"
+        value={recur}
+        onChange={(e) => setRecur(e.target.value)}
       />
       <button className="btn primary" disabled={!title.trim() || create.isPending}>
         {create.isPending ? "Adding…" : "Add"}

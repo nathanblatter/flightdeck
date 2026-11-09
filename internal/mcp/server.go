@@ -397,6 +397,7 @@ type createItemIn struct {
 	IdempotencyKey     *string        `json:"idempotency_key,omitempty" jsonschema:"supply a stable key to make creation safe to retry — a prior item with the same key is returned instead of duplicated"`
 	AcceptanceCriteria []criterionIn  `json:"acceptance_criteria,omitempty" jsonschema:"definition-of-done checklist: the contract to satisfy before marking done"`
 	DueAt              *string        `json:"due_at,omitempty" jsonschema:"when this must be done: RFC3339 or YYYY-MM-DD (a bare date means end of that day); dated items appear on get_agenda"`
+	Recur              *string        `json:"recur,omitempty" jsonschema:"recurrence rule: an interval P<n>D|W|M|Y (e.g. P1Y, P6M, P10D) applied to due_at when the item is completed, or free text an agent interprets (e.g. 'at 72,900 mi'); completing the item spawns its successor"`
 }
 
 type updateItemIn struct {
@@ -413,6 +414,7 @@ type updateItemIn struct {
 	AcceptanceCriteria []criterionIn  `json:"acceptance_criteria,omitempty" jsonschema:"replace the definition-of-done checklist (e.g. to tick criteria done)"`
 	DueAt              *string        `json:"due_at,omitempty" jsonschema:"RFC3339 or YYYY-MM-DD; an empty string clears the due date"`
 	ExpectedVersion    *int           `json:"expected_version,omitempty" jsonschema:"optimistic lock: the version you read; the update is rejected with a conflict if the item changed since"`
+	Recur              *string        `json:"recur,omitempty" jsonschema:"recurrence rule (interval P<n>D|W|M|Y or free text); empty string clears it. Moving a recurring item to done spawns its successor (returned as 'spawned')"`
 }
 
 type agendaIn struct {
@@ -581,7 +583,7 @@ func (h *handlers) register(s *mcpsdk.Server) {
 
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "update_item",
-		Description: "Update an item (type=reference reclassifies it as a durable fact, not work). A status change automatically appends a 'status_change' activity.",
+		Description: "Update an item (type=reference reclassifies it as a durable fact, not work). A status change automatically appends a 'status_change' activity. Moving a recurring item (recur set) to done spawns its successor, returned as 'spawned'.",
 	}, h.updateItem)
 
 	addTool(h, s, &mcpsdk.Tool{
@@ -616,7 +618,7 @@ func (h *handlers) register(s *mcpsdk.Server) {
 
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "complete_item",
-		Description: "Close an item in one call: mark it done, record the why as a decision, and optionally refresh the project summary. The unit of work an agent actually finishes.",
+		Description: "Close an item in one call: mark it done, record the why as a decision, and optionally refresh the project summary. The unit of work an agent actually finishes. A recurring item (recur set) spawns its successor, returned as 'spawned' — a free-text rule's successor has no due date, so set it.",
 	}, h.completeItem)
 
 	addTool(h, s, &mcpsdk.Tool{
@@ -843,6 +845,10 @@ func (h *handlers) createItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if err := service.ValidateItemFields(in.Type, in.Status, in.Priority); err != nil {
 		return dto.Item{}, err
 	}
+	recur, err := service.CreateRecurParam(in.Recur)
+	if err != nil {
+		return dto.Item{}, err
+	}
 	projectID, err := h.resolveProject(ctx, in.Project)
 	if err != nil {
 		return dto.Item{}, err
@@ -865,6 +871,7 @@ func (h *handlers) createItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		IdempotencyKey:     optStr(in.IdempotencyKey),
 		AcceptanceCriteria: criteriaJSON(in.AcceptanceCriteria),
 		DueAt:              dueAt,
+		Recur:              recur,
 	}, auth.Actor(ctx))
 	if err != nil {
 		return dto.Item{}, err
@@ -880,6 +887,10 @@ func (h *handlers) createItems(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	source := "agent"
 	for _, it := range in.Items {
 		if err := service.ValidateItemFields(it.Type, it.Status, it.Priority); err != nil {
+			return createItemsOut{}, err
+		}
+		recur, err := service.CreateRecurParam(it.Recur)
+		if err != nil {
 			return createItemsOut{}, err
 		}
 		projectID, err := h.resolveProject(ctx, it.Project)
@@ -903,6 +914,7 @@ func (h *handlers) createItems(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 			IdempotencyKey:     optStr(it.IdempotencyKey),
 			AcceptanceCriteria: criteriaJSON(it.AcceptanceCriteria),
 			DueAt:              dueAt,
+			Recur:              recur,
 		})
 	}
 	created, err := h.svc.BulkCreateItems(ctx, params, auth.Actor(ctx))
@@ -914,6 +926,10 @@ func (h *handlers) createItems(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 
 func (h *handlers) updateItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in updateItemIn) (dto.Item, error) {
 	if err := service.ValidateItemFields(in.Type, in.Status, in.Priority); err != nil {
+		return dto.Item{}, err
+	}
+	recur, clearRecur, err := service.RecurParam(in.Recur)
+	if err != nil {
 		return dto.Item{}, err
 	}
 	id, err := h.resolveItemRef(ctx, in.ID)
@@ -935,7 +951,7 @@ func (h *handlers) updateItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 			return dto.Item{}, err
 		}
 	}
-	item, err := h.svc.UpdateItem(ctx, store.UpdateItemParams{
+	w, err := h.svc.UpdateItemResult(ctx, store.UpdateItemParams{
 		ID:       id,
 		Title:    optStr(in.Title),
 		Type:     optStr(in.Type),
@@ -952,11 +968,14 @@ func (h *handlers) updateItem(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		ExpectedVersion:    expectedVersion,
 		DueAt:              dueAt,
 		ClearDueAt:         clearDue,
+		// Recur follows the same convention: empty string clears, absent keeps.
+		Recur:      recur,
+		ClearRecur: clearRecur,
 	}, auth.Actor(ctx))
 	if err != nil {
 		return dto.Item{}, err
 	}
-	return dto.ToItem(item), nil
+	return w.DTO(), nil
 }
 
 func (h *handlers) logActivity(ctx context.Context, _ *mcpsdk.CallToolRequest, in logActivityIn) (dto.Activity, error) {
@@ -1102,11 +1121,11 @@ func (h *handlers) completeItem(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 	if in.Summary != nil {
 		summary = *in.Summary
 	}
-	item, err := h.svc.CompleteItem(ctx, id, in.Why, summary, auth.Actor(ctx))
+	w, err := h.svc.CompleteItemResult(ctx, id, in.Why, summary, auth.Actor(ctx))
 	if err != nil {
 		return dto.Item{}, err
 	}
-	return dto.ToItem(item), nil
+	return w.DTO(), nil
 }
 
 type projectWithNudges struct {

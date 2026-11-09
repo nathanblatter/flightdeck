@@ -16,7 +16,7 @@ import (
 )
 
 const createItem = `-- name: CreateItem :one
-INSERT INTO items (project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, idempotency_key, acceptance_criteria, due_at)
+INSERT INTO items (project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, idempotency_key, acceptance_criteria, due_at, recur)
 VALUES (
     $1,
     COALESCE($2::text, 'task'),
@@ -32,9 +32,10 @@ VALUES (
     COALESCE($12::jsonb, '{}'),
     $13,
     COALESCE($14::jsonb, '[]'),
-    $15::timestamptz
+    $15::timestamptz,
+    $16::text
 )
-RETURNING id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at
+RETURNING id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at, recur
 `
 
 type CreateItemParams struct {
@@ -53,6 +54,7 @@ type CreateItemParams struct {
 	IdempotencyKey     *string    `json:"idempotency_key"`
 	AcceptanceCriteria []byte     `json:"acceptance_criteria"`
 	DueAt              *time.Time `json:"due_at"`
+	Recur              *string    `json:"recur"`
 }
 
 func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (Item, error) {
@@ -72,6 +74,7 @@ func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (Item, e
 		arg.IdempotencyKey,
 		arg.AcceptanceCriteria,
 		arg.DueAt,
+		arg.Recur,
 	)
 	var i Item
 	err := row.Scan(
@@ -101,12 +104,13 @@ func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (Item, e
 		&i.Embedding,
 		&i.EmbeddingModel,
 		&i.DueAt,
+		&i.Recur,
 	)
 	return i, err
 }
 
 const getItem = `-- name: GetItem :one
-SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at FROM items WHERE id = $1 AND deleted_at IS NULL
+SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at, recur FROM items WHERE id = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetItem(ctx context.Context, id uuid.UUID) (Item, error) {
@@ -139,12 +143,13 @@ func (q *Queries) GetItem(ctx context.Context, id uuid.UUID) (Item, error) {
 		&i.Embedding,
 		&i.EmbeddingModel,
 		&i.DueAt,
+		&i.Recur,
 	)
 	return i, err
 }
 
 const getItemByRef = `-- name: GetItemByRef :one
-SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at FROM items WHERE lower(ref) = lower($1) AND deleted_at IS NULL
+SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at, recur FROM items WHERE lower(ref) = lower($1) AND deleted_at IS NULL
 `
 
 func (q *Queries) GetItemByRef(ctx context.Context, lower string) (Item, error) {
@@ -177,12 +182,13 @@ func (q *Queries) GetItemByRef(ctx context.Context, lower string) (Item, error) 
 		&i.Embedding,
 		&i.EmbeddingModel,
 		&i.DueAt,
+		&i.Recur,
 	)
 	return i, err
 }
 
 const listAgendaItems = `-- name: ListAgendaItems :many
-SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, i.due_at, p.slug AS project_slug,
+SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, i.due_at, i.recur, p.slug AS project_slug,
        COALESCE((SELECT max(a.created_at) FROM activity a WHERE a.item_id = i.id), i.created_at)::timestamptz AS last_activity
 FROM items i
 JOIN projects p ON p.id = i.project_id AND p.status = 'active'
@@ -226,6 +232,7 @@ type ListAgendaItemsRow struct {
 	Embedding          pgvec.Vector    `json:"embedding"`
 	EmbeddingModel     string          `json:"embedding_model"`
 	DueAt              *time.Time      `json:"due_at"`
+	Recur              *string         `json:"recur"`
 	ProjectSlug        string          `json:"project_slug"`
 	LastActivity       time.Time       `json:"last_activity"`
 }
@@ -271,6 +278,7 @@ func (q *Queries) ListAgendaItems(ctx context.Context, arg ListAgendaItemsParams
 			&i.Embedding,
 			&i.EmbeddingModel,
 			&i.DueAt,
+			&i.Recur,
 			&i.ProjectSlug,
 			&i.LastActivity,
 		); err != nil {
@@ -285,7 +293,7 @@ func (q *Queries) ListAgendaItems(ctx context.Context, arg ListAgendaItemsParams
 }
 
 const listItems = `-- name: ListItems :many
-SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, i.due_at FROM items i
+SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, i.due_at, i.recur FROM items i
 WHERE i.deleted_at IS NULL
   AND ($1::uuid IS NOT NULL OR NOT EXISTS (
         SELECT 1 FROM projects p
@@ -367,6 +375,7 @@ func (q *Queries) ListItems(ctx context.Context, arg ListItemsParams) ([]Item, e
 			&i.Embedding,
 			&i.EmbeddingModel,
 			&i.DueAt,
+			&i.Recur,
 		); err != nil {
 			return nil, err
 		}
@@ -379,7 +388,7 @@ func (q *Queries) ListItems(ctx context.Context, arg ListItemsParams) ([]Item, e
 }
 
 const listOpenItemsByProject = `-- name: ListOpenItemsByProject :many
-SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at FROM items
+SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at, recur FROM items
 WHERE project_id = $1 AND deleted_at IS NULL AND status NOT IN ('done', 'wontfix')
   AND type <> 'reference'
 ORDER BY
@@ -431,6 +440,7 @@ func (q *Queries) ListOpenItemsByProject(ctx context.Context, arg ListOpenItemsB
 			&i.Embedding,
 			&i.EmbeddingModel,
 			&i.DueAt,
+			&i.Recur,
 		); err != nil {
 			return nil, err
 		}
@@ -506,7 +516,7 @@ func (q *Queries) ListReferenceItemsByProject(ctx context.Context, arg ListRefer
 const softDeleteItem = `-- name: SoftDeleteItem :one
 UPDATE items SET deleted_at = now(), updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at
+RETURNING id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at, recur
 `
 
 func (q *Queries) SoftDeleteItem(ctx context.Context, id uuid.UUID) (Item, error) {
@@ -539,6 +549,7 @@ func (q *Queries) SoftDeleteItem(ctx context.Context, id uuid.UUID) (Item, error
 		&i.Embedding,
 		&i.EmbeddingModel,
 		&i.DueAt,
+		&i.Recur,
 	)
 	return i, err
 }
@@ -559,6 +570,11 @@ UPDATE items SET
     due_at    = CASE
                     WHEN $11::bool THEN NULL
                     ELSE COALESCE($12::timestamptz, due_at)
+                END,
+    -- recur: same three-way convention as due_at.
+    recur     = CASE
+                    WHEN $13::bool THEN NULL
+                    ELSE COALESCE($14::text, recur)
                 END,
     closed_at = CASE
                     WHEN COALESCE($4::text, status) IN ('done', 'wontfix')
@@ -581,9 +597,9 @@ UPDATE items SET
                 END,
     version    = version + 1,
     updated_at = now()
-WHERE id = $13 AND deleted_at IS NULL
-  AND ($14::int IS NULL OR version = $14)
-RETURNING id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at
+WHERE id = $15 AND deleted_at IS NULL
+  AND ($16::int IS NULL OR version = $16)
+RETURNING id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at, recur
 `
 
 type UpdateItemParams struct {
@@ -599,6 +615,8 @@ type UpdateItemParams struct {
 	AcceptanceCriteria []byte     `json:"acceptance_criteria"`
 	ClearDueAt         bool       `json:"clear_due_at"`
 	DueAt              *time.Time `json:"due_at"`
+	ClearRecur         bool       `json:"clear_recur"`
+	Recur              *string    `json:"recur"`
 	ID                 uuid.UUID  `json:"id"`
 	ExpectedVersion    *int32     `json:"expected_version"`
 }
@@ -619,6 +637,8 @@ func (q *Queries) UpdateItem(ctx context.Context, arg UpdateItemParams) (Item, e
 		arg.AcceptanceCriteria,
 		arg.ClearDueAt,
 		arg.DueAt,
+		arg.ClearRecur,
+		arg.Recur,
 		arg.ID,
 		arg.ExpectedVersion,
 	)
@@ -650,6 +670,7 @@ func (q *Queries) UpdateItem(ctx context.Context, arg UpdateItemParams) (Item, e
 		&i.Embedding,
 		&i.EmbeddingModel,
 		&i.DueAt,
+		&i.Recur,
 	)
 	return i, err
 }

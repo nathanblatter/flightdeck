@@ -189,18 +189,29 @@ func projectKeys(p store.Project) []string {
 // Everything runs in ONE transaction: the tool's whole promise is that an item
 // never ends up done without its recorded why, so a partial failure rolls the
 // status change back too.
+//
+// A recurring item (recur set) also spawns its successor in the same tx; the
+// result carries it. See spawnRecurrence.
 func (s *Service) CompleteItem(ctx context.Context, itemID uuid.UUID, why, summary string, actor string) (store.Item, error) {
-	var updated store.Item
+	w, err := s.CompleteItemResult(ctx, itemID, why, summary, actor)
+	return w.Item, err
+}
+
+// CompleteItemResult is CompleteItem returning the full write (item + spawned
+// successor, if any).
+func (s *Service) CompleteItemResult(ctx context.Context, itemID uuid.UUID, why, summary string, actor string) (ItemWrite, error) {
+	var w ItemWrite
 	err := s.St.WithTx(ctx, func(q *store.Queries) error {
 		prev, err := q.GetItem(ctx, itemID)
 		if err != nil {
 			return err
 		}
 		done := "done"
-		updated, err = q.UpdateItem(ctx, store.UpdateItemParams{ID: itemID, Status: &done})
+		updated, err := q.UpdateItem(ctx, store.UpdateItemParams{ID: itemID, Status: &done})
 		if err != nil {
 			return err
 		}
+		w.Item = updated
 		if prev.Status != updated.Status {
 			if _, err := q.CreateActivity(ctx, store.CreateActivityParams{
 				ProjectID: updated.ProjectID,
@@ -241,12 +252,16 @@ func (s *Service) CompleteItem(ctx context.Context, itemID uuid.UUID, why, summa
 				return err
 			}
 		}
+		if closedByWrite(prev, updated) {
+			w.Spawned, err = s.spawnRecurrence(ctx, q, updated, actor)
+			return err
+		}
 		return nil
 	})
 	if err == nil {
 		s.cache.clear()
 	}
-	return updated, err
+	return w, err
 }
 
 // LinkItems creates (or upserts) a directed link between two items.

@@ -122,6 +122,7 @@ type createItemReq struct {
 	IdempotencyKey     *string         `json:"idempotency_key"`
 	AcceptanceCriteria json.RawMessage `json:"acceptance_criteria"`
 	DueAt              *string         `json:"due_at"` // RFC3339 or YYYY-MM-DD
+	Recur              *string         `json:"recur"`
 }
 
 func (s *Server) createItem(w http.ResponseWriter, r *http.Request) {
@@ -135,6 +136,11 @@ func (s *Server) createItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := service.ValidateItemFields(req.Type, req.Status, req.Priority); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	recur, err := service.CreateRecurParam(req.Recur)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -168,6 +174,7 @@ func (s *Server) createItem(w http.ResponseWriter, r *http.Request) {
 		IdempotencyKey:     req.IdempotencyKey,
 		AcceptanceCriteria: req.AcceptanceCriteria,
 		DueAt:              dueAt,
+		Recur:              recur,
 	}, auth.Actor(r.Context()))
 	if err != nil {
 		writeDBError(w, err)
@@ -189,6 +196,8 @@ type patchItemReq struct {
 	AcceptanceCriteria json.RawMessage `json:"acceptance_criteria"`
 	ExpectedVersion    *int32          `json:"expected_version"`
 	DueAt              *string         `json:"due_at"` // absent keeps, "" clears, value replaces
+	// Recur: empty string clears the rule, absent leaves it unchanged.
+	Recur *string `json:"recur"`
 }
 
 func (s *Server) patchItem(w http.ResponseWriter, r *http.Request) {
@@ -216,7 +225,12 @@ func (s *Server) patchItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	item, err := s.Svc.UpdateItem(r.Context(), store.UpdateItemParams{
+	recur, clearRecur, err := service.RecurParam(req.Recur)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	res, err := s.Svc.UpdateItemResult(r.Context(), store.UpdateItemParams{
 		ID:                 id,
 		Title:              req.Title,
 		Body:               req.Body,
@@ -231,12 +245,14 @@ func (s *Server) patchItem(w http.ResponseWriter, r *http.Request) {
 		ExpectedVersion:    req.ExpectedVersion,
 		DueAt:              dueAt,
 		ClearDueAt:         clearDue,
+		Recur:              recur,
+		ClearRecur:         clearRecur,
 	}, auth.Actor(r.Context()))
 	if err != nil {
 		writeDBError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, dto.ToItem(item))
+	writeJSON(w, http.StatusOK, res.DTO())
 }
 
 func (s *Server) deleteItem(w http.ResponseWriter, r *http.Request) {

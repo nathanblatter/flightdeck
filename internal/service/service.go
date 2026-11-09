@@ -150,15 +150,23 @@ func isUniqueViolation(err error) bool {
 }
 
 // UpdateItem applies a patch and, if the status changed, appends a
-// `status_change` activity recording the from→to move.
+// `status_change` activity recording the from→to move. Moving a recurring
+// item to done also spawns its successor; see UpdateItemResult for that.
 func (s *Service) UpdateItem(ctx context.Context, p store.UpdateItemParams, actor string) (store.Item, error) {
-	var item store.Item
+	w, err := s.UpdateItemResult(ctx, p, actor)
+	return w.Item, err
+}
+
+// UpdateItemResult is UpdateItem returning the full write: the item and, when
+// the patch moved a recurring item to done, the spawned successor.
+func (s *Service) UpdateItemResult(ctx context.Context, p store.UpdateItemParams, actor string) (ItemWrite, error) {
+	var w ItemWrite
 	err := s.St.WithTx(ctx, func(q *store.Queries) error {
 		prev, err := q.GetItem(ctx, p.ID)
 		if err != nil {
 			return err
 		}
-		item, err = q.UpdateItem(ctx, p)
+		w.Item, err = q.UpdateItem(ctx, p)
 		if errors.Is(err, pgx.ErrNoRows) {
 			// The row exists (GetItem above succeeded), so a no-row update means
 			// the expected_version guard didn't match: a concurrent edit.
@@ -169,25 +177,31 @@ func (s *Service) UpdateItem(ctx context.Context, p store.UpdateItemParams, acto
 		}
 		if p.Status != nil && *p.Status != prev.Status {
 			_, err = q.CreateActivity(ctx, store.CreateActivityParams{
-				ProjectID: item.ProjectID,
-				ItemID:    itemUUID(item.ID),
+				ProjectID: w.Item.ProjectID,
+				ItemID:    itemUUID(w.Item.ID),
 				Kind:      strptr("status_change"),
 				Actor:     strptr(actor),
-				Body:      strptr(fmt.Sprintf("%s → %s", prev.Status, item.Status)),
+				Body:      strptr(fmt.Sprintf("%s → %s", prev.Status, w.Item.Status)),
 			})
 			if err != nil {
 				return err
 			}
-			return s.enqueue(ctx, q, item.ProjectID, "item.status_changed", map[string]any{
-				"item": dto.ToItem(item), "from": prev.Status, "to": item.Status,
-			})
+			if err := s.enqueue(ctx, q, w.Item.ProjectID, "item.status_changed", map[string]any{
+				"item": dto.ToItem(w.Item), "from": prev.Status, "to": w.Item.Status,
+			}); err != nil {
+				return err
+			}
+		}
+		if closedByWrite(prev, w.Item) {
+			w.Spawned, err = s.spawnRecurrence(ctx, q, w.Item, actor)
+			return err
 		}
 		return nil
 	})
 	if err == nil {
 		s.cache.clear()
 	}
-	return item, err
+	return w, err
 }
 
 // LogActivity appends a free-form activity row (decision/progress/comment) and

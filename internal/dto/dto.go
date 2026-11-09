@@ -96,6 +96,10 @@ type Item struct {
 	// DueAt is the optional date the item must be done by. Dated items feed the
 	// cross-project agenda and the overdue nudges on orient.
 	DueAt *time.Time `json:"due_at,omitempty"`
+	// Recur is the recurrence rule: an interval (P1Y, P6M, P10D) applied to
+	// due_at when the item is completed, or free text an agent interprets.
+	// Completing an item with a rule spawns its successor.
+	Recur *string `json:"recur,omitempty"`
 	// Version is the optimistic-concurrency counter — pass it back as
 	// expected_version on update to detect a concurrent edit (conflict).
 	Version int `json:"version"`
@@ -114,6 +118,12 @@ type Item struct {
 	// Attachments (screenshots) are populated on single-item fetches only —
 	// list views skip them to avoid an N+1.
 	Attachments []Attachment `json:"attachments,omitempty"`
+	// Spawned is the recurrence successor created when this item was
+	// completed; populated only on the update_item / complete_item response
+	// that closed it. Nudges ride alongside (e.g. a free-text rule's successor
+	// has no due date yet).
+	Spawned *ItemBrief `json:"spawned,omitempty"`
+	Nudges  []string   `json:"nudges,omitempty"`
 }
 
 // Criterion is one definition-of-done checklist entry on an item.
@@ -154,7 +164,7 @@ func ToItemTrunc(i store.Item, maxBody int) Item {
 		ID: i.ID.String(), Ref: i.Ref, ProjectID: i.ProjectID.String(), Type: i.Type, Title: i.Title, Body: trunc(i.Body, maxBody),
 		Status: i.Status, Priority: i.Priority, Assignee: i.Assignee, Position: i.Position,
 		Source: i.Source, ExternalRef: i.ExternalRef, Tags: tags, Metadata: toMeta(i.Metadata),
-		CreatedAt: i.CreatedAt, UpdatedAt: i.UpdatedAt, ClosedAt: i.ClosedAt, DueAt: i.DueAt, Version: int(i.Version),
+		CreatedAt: i.CreatedAt, UpdatedAt: i.UpdatedAt, ClosedAt: i.ClosedAt, DueAt: i.DueAt, Recur: i.Recur, Version: int(i.Version),
 		AcceptanceCriteria: criteria, AcceptanceUnmet: unmet,
 	}
 }
@@ -189,6 +199,7 @@ type compactItem struct {
 	Metadata           map[string]any `json:"metadata,omitempty"`
 	UpdatedAt          time.Time      `json:"updated_at"`
 	DueAt              *time.Time     `json:"due_at,omitempty"`
+	Recur              *string        `json:"recur,omitempty"`
 	Blocked            bool           `json:"blocked,omitempty"`
 	BlockedBy          []string       `json:"blocked_by,omitempty"`
 	AcceptanceCriteria []Criterion    `json:"acceptance_criteria,omitempty"`
@@ -204,7 +215,7 @@ func (i Item) MarshalJSON() ([]byte, error) {
 	return json.Marshal(compactItem{
 		Ref: i.Ref, Type: i.Type, Title: i.Title, Body: i.Body, Status: i.Status, Priority: i.Priority,
 		Assignee: i.Assignee, ExternalRef: i.ExternalRef, Tags: i.Tags, Metadata: i.Metadata,
-		UpdatedAt: i.UpdatedAt, DueAt: i.DueAt, Blocked: i.Blocked, BlockedBy: i.BlockedBy,
+		UpdatedAt: i.UpdatedAt, DueAt: i.DueAt, Recur: i.Recur, Blocked: i.Blocked, BlockedBy: i.BlockedBy,
 		AcceptanceCriteria: i.AcceptanceCriteria, AcceptanceUnmet: i.AcceptanceUnmet,
 	})
 }

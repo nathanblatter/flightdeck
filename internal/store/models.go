@@ -98,6 +98,7 @@ type Item struct {
 	Embedding          pgvec.Vector    `json:"embedding"`
 	EmbeddingModel     string          `json:"embedding_model"`
 	DueAt              *time.Time      `json:"due_at"`
+	Recur              *string         `json:"recur"`
 }
 
 type ItemLink struct {
