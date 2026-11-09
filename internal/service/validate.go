@@ -10,16 +10,19 @@ import (
 // Validating at the app layer turns bad input into a 400 with a helpful message
 // instead of a 500 from the database CHECK constraint.
 var (
-	ValidItemTypes         = []string{"task", "bug", "idea", "note", "reference"}
-	ValidItemStatuses      = []string{"backlog", "todo", "in_progress", "blocked", "done", "wontfix"}
-	ValidItemPriorities    = []string{"low", "med", "high", "urgent"}
-	ValidActivityKinds     = []string{"decision", "progress", "status_change", "comment", "created", "rejected"}
-	ValidLinkKinds         = []string{"blocks", "relates_to", "parent_of"}
-	ValidConfidences       = []string{"unspecified", "inferred", "confirmed"}
-	ValidRefKinds          = []string{"commit", "file", "pr", "branch", "url"}
-	ValidProjectStatus     = []string{"active", "paused", "done", "archived"}
-	ValidContextEffects    = []string{"helpful", "neutral", "harmful"}
-	ValidContextMechanisms = []string{
+	ValidItemTypes      = []string{"task", "bug", "idea", "note", "reference"}
+	ValidItemStatuses   = []string{"backlog", "todo", "in_progress", "blocked", "done", "wontfix"}
+	ValidItemPriorities = []string{"low", "med", "high", "urgent"}
+	ValidActivityKinds  = []string{"decision", "progress", "status_change", "comment", "created", "rejected"}
+	ValidLinkKinds      = []string{"blocks", "relates_to", "parent_of"}
+	ValidConfidences    = []string{"unspecified", "inferred", "confirmed"}
+	ValidRefKinds       = []string{"commit", "file", "pr", "branch", "url"}
+	ValidProjectStatus  = []string{"active", "paused", "done", "archived"}
+	// Project domain / sensitivity (migrations/00022_project_domain.sql).
+	ValidProjectDomains       = []string{"life", "school", "work"}
+	ValidProjectSensitivities = []string{"normal", "private"}
+	ValidContextEffects       = []string{"helpful", "neutral", "harmful"}
+	ValidContextMechanisms    = []string{
 		"decision_changed", "prevented_error", "duplicate_work_avoided",
 		"reconstruction_saved", "ignored", "stale_or_incorrect",
 	}
@@ -72,6 +75,35 @@ func ValidateProjectStatus(status *string) error {
 		return oneOf("status", *status, ValidProjectStatus)
 	}
 	return nil
+}
+
+// ValidateProjectDomain checks an optional project domain; nil/empty is skipped.
+func ValidateProjectDomain(domain *string) error {
+	if domain != nil && *domain != "" {
+		return oneOf("domain", *domain, ValidProjectDomains)
+	}
+	return nil
+}
+
+// ValidateProjectSensitivity checks an optional project sensitivity; nil/empty
+// is skipped.
+func ValidateProjectSensitivity(sensitivity *string) error {
+	if sensitivity != nil && *sensitivity != "" {
+		return oneOf("sensitivity", *sensitivity, ValidProjectSensitivities)
+	}
+	return nil
+}
+
+// ValidateProjectTags checks the optional status/domain/sensitivity fields of
+// a project write in one call.
+func ValidateProjectTags(status, domain, sensitivity *string) error {
+	if err := ValidateProjectStatus(status); err != nil {
+		return err
+	}
+	if err := ValidateProjectDomain(domain); err != nil {
+		return err
+	}
+	return ValidateProjectSensitivity(sensitivity)
 }
 
 // ValidateContextImpact checks the bounded, internally consistent reporting

@@ -79,6 +79,8 @@ FROM activity a
 JOIN activity_embeddings e ON e.activity_id = a.id
 WHERE e.embedding IS NOT NULL
   AND ($2::uuid IS NULL OR a.project_id = $2)
+  AND ($2::uuid IS NOT NULL OR NOT EXISTS (
+        SELECT 1 FROM projects pp WHERE pp.id = a.project_id AND pp.sensitivity = 'private'))
   AND (e.embedding <=> $1::vector) < $3::float8
 ORDER BY e.embedding <=> $1::vector
 LIMIT COALESCE($4::int, 25)

@@ -4,6 +4,8 @@ FROM items i
 WHERE i.deleted_at IS NULL
   AND i.search @@ plainto_tsquery('english', sqlc.arg('q'))
   AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
+  AND (sqlc.narg('project_id')::uuid IS NOT NULL OR NOT EXISTS (
+        SELECT 1 FROM projects pp WHERE pp.id = i.project_id AND pp.sensitivity = 'private'))
   AND (sqlc.narg('type')::text IS NULL OR i.type = sqlc.narg('type'))
 ORDER BY rank DESC
 LIMIT COALESCE(sqlc.narg('lim')::int, 50);
@@ -16,13 +18,16 @@ FROM items i
 WHERE i.deleted_at IS NULL
   AND (i.title % sqlc.arg('q') OR i.ref % sqlc.arg('q') OR i.title ILIKE '%' || sqlc.arg('q') || '%')
   AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
+  AND (sqlc.narg('project_id')::uuid IS NOT NULL OR NOT EXISTS (
+        SELECT 1 FROM projects pp WHERE pp.id = i.project_id AND pp.sensitivity = 'private'))
   AND (sqlc.narg('type')::text IS NULL OR i.type = sqlc.narg('type'))
 ORDER BY sim DESC
 LIMIT COALESCE(sqlc.narg('lim')::int, 25);
 
 -- name: ListTopOpenItemsPerProject :many
 -- Top-N open items for every active project in a single windowed query — replaces
--- the per-project N+1 loop that built the global "load the map" view.
+-- the per-project N+1 loop that built the global "load the map" view. Private
+-- projects never appear on the global map, so they are skipped here too.
 SELECT * FROM (
     SELECT i.*, p.slug AS project_slug,
            row_number() OVER (
@@ -31,7 +36,7 @@ SELECT * FROM (
                         i.position ASC
            ) AS rn
     FROM items i
-    JOIN projects p ON p.id = i.project_id AND p.status = 'active'
+    JOIN projects p ON p.id = i.project_id AND p.status = 'active' AND p.sensitivity <> 'private'
     WHERE i.deleted_at IS NULL AND i.status NOT IN ('done', 'wontfix')
       AND i.type <> 'reference'
 ) s
@@ -61,6 +66,8 @@ WITH ql AS (
     WHERE i.deleted_at IS NULL
       AND i.search @@ anyq.q
       AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
+      AND (sqlc.narg('project_id')::uuid IS NOT NULL OR NOT EXISTS (
+          SELECT 1 FROM projects pp WHERE pp.id = i.project_id AND pp.sensitivity = 'private'))
       AND (sqlc.narg('type')::text IS NULL OR i.type = sqlc.narg('type'))
 )
 SELECT i.*, h.matched, n.total, (h.matched::float8 / n.total)::float8 AS coverage, h.rank

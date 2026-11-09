@@ -210,6 +210,8 @@ SELECT a.id, a.project_id, a.item_id, a.kind, a.actor, a.body, a.metadata, a.cre
 FROM activity a
 WHERE a.search @@ plainto_tsquery('english', $1)
   AND ($2::uuid IS NULL OR a.project_id = $2)
+  AND ($2::uuid IS NOT NULL OR NOT EXISTS (
+        SELECT 1 FROM projects pp WHERE pp.id = a.project_id AND pp.sensitivity = 'private'))
 ORDER BY rank DESC
 LIMIT COALESCE($3::int, 50)
 `

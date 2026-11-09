@@ -42,8 +42,14 @@ func (s *Server) agenda(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// globalContext takes an optional ?domain=life|school|work filter.
 func (s *Server) globalContext(w http.ResponseWriter, r *http.Request) {
-	bundle, err := s.Svc.GlobalContext(r.Context(), restVerbosity(r))
+	domain := r.URL.Query().Get("domain")
+	if err := service.ValidateProjectDomain(&domain); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	bundle, err := s.Svc.GlobalContext(r.Context(), restVerbosity(r), domain)
 	if err != nil {
 		writeDBError(w, err)
 		return

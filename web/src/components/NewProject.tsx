@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type Project } from "../api";
+import {
+  api,
+  PROJECT_DOMAINS,
+  type Project,
+  type ProjectDomain,
+  type ProjectSensitivity,
+} from "../api";
 import { projectTreeOrder } from "../lib";
 
 const slugify = (s: string) =>
@@ -22,6 +28,8 @@ export function NewProject({
   const [slugEdited, setSlugEdited] = useState(false);
   const [summary, setSummary] = useState("");
   const [parent, setParent] = useState("");
+  const [domain, setDomain] = useState<ProjectDomain>("work");
+  const [sensitivity, setSensitivity] = useState<ProjectSensitivity>("normal");
 
   const create = useMutation({
     mutationFn: () =>
@@ -30,6 +38,8 @@ export function NewProject({
         name: name.trim(),
         summary: summary.trim() || undefined,
         parent: parent || undefined,
+        domain,
+        sensitivity,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["projects"] });
@@ -76,6 +86,25 @@ export function NewProject({
             {p.name}
           </option>
         ))}
+      </select>
+      <select
+        value={domain}
+        title="Domain"
+        onChange={(e) => setDomain(e.target.value as ProjectDomain)}
+      >
+        {PROJECT_DOMAINS.map((d) => (
+          <option key={d} value={d}>
+            {d}
+          </option>
+        ))}
+      </select>
+      <select
+        value={sensitivity}
+        title="Sensitivity"
+        onChange={(e) => setSensitivity(e.target.value as ProjectSensitivity)}
+      >
+        <option value="normal">normal</option>
+        <option value="private">🔒 private</option>
       </select>
       <button
         className="btn primary"

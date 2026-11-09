@@ -20,6 +20,18 @@ type ProjectPurgeCounts struct {
 	Attachments int64 `json:"attachments"`
 }
 
+// UpdateProject patches project fields and drops the orient caches, so a
+// status/domain/sensitivity change shows up on the next global context read
+// instead of after the cache TTL.
+func (s *Service) UpdateProject(ctx context.Context, p store.UpdateProjectParams) (store.Project, error) {
+	row, err := s.St.UpdateProject(ctx, p)
+	if err != nil {
+		return store.Project{}, err
+	}
+	s.cache.clear()
+	return row, nil
+}
+
 // ArchiveProject is the reversible half of deletion: it flips status to
 // 'archived', which hides the project from orient reads and the default UI
 // while keeping every row. Nothing is destroyed, so agents are allowed to do

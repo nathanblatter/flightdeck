@@ -1,6 +1,6 @@
 import { useDraggable } from "@dnd-kit/core";
 import type { Item, Project } from "../api";
-import { PRIORITY_COLOR, TYPE_GLYPH, formatDue, isOverdue, projectColor } from "../lib";
+import { PRIORITY_COLOR, TYPE_GLYPH, chipLabel, formatDue, isOverdue, projectColor } from "../lib";
 
 export function Card({
   item,
@@ -53,9 +53,9 @@ export function Card({
               e.stopPropagation();
               onOpenProject(project.slug);
             }}
-            title={`Open ${project.name}`}
+            title={`Open ${project.name}${project.sensitivity === "private" ? " (private)" : ""}`}
           >
-            {project.slug}
+            {chipLabel(project)}
           </button>
         )}
         {item.blocked && (

@@ -102,7 +102,7 @@ func (q *Queries) CountProjectContents(ctx context.Context, projectID uuid.UUID)
 }
 
 const createProject = `-- name: CreateProject :one
-INSERT INTO projects (slug, name, status, summary, instructions, repo_url, site_url, aliases, parent_slug)
+INSERT INTO projects (slug, name, status, summary, instructions, repo_url, site_url, aliases, parent_slug, domain, sensitivity)
 VALUES (
     $1,
     $2,
@@ -112,9 +112,11 @@ VALUES (
     $6,
     $7,
     COALESCE($8::text[], '{}'),
-    $9
+    $9,
+    COALESCE($10::text, 'work'),
+    COALESCE($11::text, 'normal')
 )
-RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug
+RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug, domain, sensitivity
 `
 
 type CreateProjectParams struct {
@@ -127,6 +129,8 @@ type CreateProjectParams struct {
 	SiteUrl      *string  `json:"site_url"`
 	Aliases      []string `json:"aliases"`
 	ParentSlug   *string  `json:"parent_slug"`
+	Domain       *string  `json:"domain"`
+	Sensitivity  *string  `json:"sensitivity"`
 }
 
 func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error) {
@@ -140,6 +144,8 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		arg.SiteUrl,
 		arg.Aliases,
 		arg.ParentSlug,
+		arg.Domain,
+		arg.Sensitivity,
 	)
 	var i Project
 	err := row.Scan(
@@ -156,12 +162,14 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.ItemSeq,
 		&i.Aliases,
 		&i.ParentSlug,
+		&i.Domain,
+		&i.Sensitivity,
 	)
 	return i, err
 }
 
 const deleteProject = `-- name: DeleteProject :one
-DELETE FROM projects WHERE slug = $1 RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug
+DELETE FROM projects WHERE slug = $1 RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug, domain, sensitivity
 `
 
 // Hard-delete a project. items/activity/webhooks cascade; child projects are
@@ -184,12 +192,14 @@ func (q *Queries) DeleteProject(ctx context.Context, slug string) (Project, erro
 		&i.ItemSeq,
 		&i.Aliases,
 		&i.ParentSlug,
+		&i.Domain,
+		&i.Sensitivity,
 	)
 	return i, err
 }
 
 const getProjectByID = `-- name: GetProjectByID :one
-SELECT id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug FROM projects WHERE id = $1
+SELECT id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug, domain, sensitivity FROM projects WHERE id = $1
 `
 
 func (q *Queries) GetProjectByID(ctx context.Context, id uuid.UUID) (Project, error) {
@@ -209,12 +219,14 @@ func (q *Queries) GetProjectByID(ctx context.Context, id uuid.UUID) (Project, er
 		&i.ItemSeq,
 		&i.Aliases,
 		&i.ParentSlug,
+		&i.Domain,
+		&i.Sensitivity,
 	)
 	return i, err
 }
 
 const getProjectBySlug = `-- name: GetProjectBySlug :one
-SELECT id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug FROM projects WHERE slug = $1
+SELECT id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug, domain, sensitivity FROM projects WHERE slug = $1
 `
 
 func (q *Queries) GetProjectBySlug(ctx context.Context, slug string) (Project, error) {
@@ -234,6 +246,8 @@ func (q *Queries) GetProjectBySlug(ctx context.Context, slug string) (Project, e
 		&i.ItemSeq,
 		&i.Aliases,
 		&i.ParentSlug,
+		&i.Domain,
+		&i.Sensitivity,
 	)
 	return i, err
 }
@@ -268,16 +282,18 @@ func (q *Queries) ListAttachmentKeysForProject(ctx context.Context, projectID uu
 }
 
 const listChildProjects = `-- name: ListChildProjects :many
-SELECT slug, name, status, summary FROM projects
+SELECT slug, name, status, summary, domain, sensitivity FROM projects
 WHERE parent_slug = $1
 ORDER BY name
 `
 
 type ListChildProjectsRow struct {
-	Slug    string `json:"slug"`
-	Name    string `json:"name"`
-	Status  string `json:"status"`
-	Summary string `json:"summary"`
+	Slug        string `json:"slug"`
+	Name        string `json:"name"`
+	Status      string `json:"status"`
+	Summary     string `json:"summary"`
+	Domain      string `json:"domain"`
+	Sensitivity string `json:"sensitivity"`
 }
 
 func (q *Queries) ListChildProjects(ctx context.Context, parentSlug *string) ([]ListChildProjectsRow, error) {
@@ -294,6 +310,8 @@ func (q *Queries) ListChildProjects(ctx context.Context, parentSlug *string) ([]
 			&i.Name,
 			&i.Status,
 			&i.Summary,
+			&i.Domain,
+			&i.Sensitivity,
 		); err != nil {
 			return nil, err
 		}
@@ -306,19 +324,30 @@ func (q *Queries) ListChildProjects(ctx context.Context, parentSlug *string) ([]
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug FROM projects
+SELECT id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug, domain, sensitivity FROM projects
 WHERE ($1::text IS NULL OR status = $1)
   AND ($1::text IS NOT NULL OR status <> 'archived')
+  AND ($2::text IS NULL OR domain = $2)
+  AND ($3::bool OR sensitivity <> 'private')
 ORDER BY
     CASE status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 WHEN 'done' THEN 2 ELSE 3 END,
     updated_at DESC
 `
 
+type ListProjectsParams struct {
+	Status         *string `json:"status"`
+	Domain         *string `json:"domain"`
+	IncludePrivate bool    `json:"include_private"`
+}
+
 // Archived projects are excluded unless asked for by name (status='archived').
 // That exclusion is what makes archiving mean something: without it 'archived'
 // is just a label and the project still clutters every orient read and picker.
-func (q *Queries) ListProjects(ctx context.Context, status *string) ([]Project, error) {
-	rows, err := q.db.Query(ctx, listProjects, status)
+// domain narrows to one of life|school|work. include_private=false drops
+// sensitivity='private' projects: cross-project surfaces (MCP list_projects,
+// global context) pass false; resolvers and the single-user web UI pass true.
+func (q *Queries) ListProjects(ctx context.Context, arg ListProjectsParams) ([]Project, error) {
+	rows, err := q.db.Query(ctx, listProjects, arg.Status, arg.Domain, arg.IncludePrivate)
 	if err != nil {
 		return nil, err
 	}
@@ -340,6 +369,8 @@ func (q *Queries) ListProjects(ctx context.Context, status *string) ([]Project, 
 			&i.ItemSeq,
 			&i.Aliases,
 			&i.ParentSlug,
+			&i.Domain,
+			&i.Sensitivity,
 		); err != nil {
 			return nil, err
 		}
@@ -386,7 +417,7 @@ func (q *Queries) ProjectDescendants(ctx context.Context, slug string) ([]string
 const setProjectInstructions = `-- name: SetProjectInstructions :one
 UPDATE projects SET instructions = $2, updated_at = now()
 WHERE slug = $1
-RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug
+RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug, domain, sensitivity
 `
 
 type SetProjectInstructionsParams struct {
@@ -411,6 +442,8 @@ func (q *Queries) SetProjectInstructions(ctx context.Context, arg SetProjectInst
 		&i.ItemSeq,
 		&i.Aliases,
 		&i.ParentSlug,
+		&i.Domain,
+		&i.Sensitivity,
 	)
 	return i, err
 }
@@ -424,12 +457,14 @@ UPDATE projects SET
     repo_url     = COALESCE($5::text, repo_url),
     site_url     = COALESCE($6::text, site_url),
     aliases      = COALESCE($7::text[], aliases),
-    parent_slug  = CASE WHEN $8::bool
-                        THEN $9::text
+    domain       = COALESCE($8::text, domain),
+    sensitivity  = COALESCE($9::text, sensitivity),
+    parent_slug  = CASE WHEN $10::bool
+                        THEN $11::text
                         ELSE parent_slug END,
     updated_at   = now()
-WHERE slug = $10
-RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug
+WHERE slug = $12
+RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug, domain, sensitivity
 `
 
 type UpdateProjectParams struct {
@@ -440,6 +475,8 @@ type UpdateProjectParams struct {
 	RepoUrl      *string  `json:"repo_url"`
 	SiteUrl      *string  `json:"site_url"`
 	Aliases      []string `json:"aliases"`
+	Domain       *string  `json:"domain"`
+	Sensitivity  *string  `json:"sensitivity"`
 	SetParent    bool     `json:"set_parent"`
 	ParentSlug   *string  `json:"parent_slug"`
 	Slug         string   `json:"slug"`
@@ -456,6 +493,8 @@ func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (P
 		arg.RepoUrl,
 		arg.SiteUrl,
 		arg.Aliases,
+		arg.Domain,
+		arg.Sensitivity,
 		arg.SetParent,
 		arg.ParentSlug,
 		arg.Slug,
@@ -475,6 +514,8 @@ func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (P
 		&i.ItemSeq,
 		&i.Aliases,
 		&i.ParentSlug,
+		&i.Domain,
+		&i.Sensitivity,
 	)
 	return i, err
 }
@@ -482,7 +523,7 @@ func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (P
 const updateProjectSummary = `-- name: UpdateProjectSummary :one
 UPDATE projects SET summary = $2, updated_at = now()
 WHERE slug = $1
-RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug
+RETURNING id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug, domain, sensitivity
 `
 
 type UpdateProjectSummaryParams struct {
@@ -507,6 +548,8 @@ func (q *Queries) UpdateProjectSummary(ctx context.Context, arg UpdateProjectSum
 		&i.ItemSeq,
 		&i.Aliases,
 		&i.ParentSlug,
+		&i.Domain,
+		&i.Sensitivity,
 	)
 	return i, err
 }

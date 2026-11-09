@@ -36,7 +36,12 @@ type Project struct {
 	Status string `json:"status"`
 	// Parent is the slug of the parent project when this project is part of a
 	// tree (e.g. a work area with sub-projects). Absent for roots.
-	Parent       *string   `json:"parent,omitempty"`
+	Parent *string `json:"parent,omitempty"`
+	// Domain is the part of life the project belongs to (life|school|work);
+	// Sensitivity is normal|private. A private project is left out of every
+	// cross-project surface unless the call names its slug.
+	Domain       string    `json:"domain"`
+	Sensitivity  string    `json:"sensitivity"`
 	Summary      string    `json:"summary"`
 	Instructions string    `json:"instructions,omitempty"`
 	Aliases      []string  `json:"aliases,omitempty"`
@@ -53,6 +58,7 @@ func ToProject(p store.Project) Project {
 	}
 	return Project{
 		ID: p.ID.String(), Slug: p.Slug, Name: p.Name, Status: p.Status, Parent: p.ParentSlug,
+		Domain: p.Domain, Sensitivity: p.Sensitivity,
 		Summary: p.Summary, Instructions: p.Instructions, Aliases: aliases,
 		RepoURL: p.RepoUrl, SiteURL: p.SiteUrl,
 		CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
@@ -231,6 +237,7 @@ func ToProjectListBriefs(ps []store.Project) []ProjectBrief {
 		}
 		out[i] = ProjectBrief{
 			Slug: p.Slug, Name: p.Name, Status: p.Status, Parent: p.ParentSlug,
+			Domain: briefDomain(p.Domain), Sensitivity: briefSensitivity(p.Sensitivity),
 			Aliases: aliases, Summary: trunc(firstSentence(p.Summary), briefSummaryMax),
 		}
 	}
@@ -455,18 +462,46 @@ type ProjectContext struct {
 // child listings) and the compact list_projects — enough to decide whether to
 // orient into it. Parent and Aliases are set by list_projects only.
 type ProjectBrief struct {
-	Slug    string   `json:"slug"`
-	Name    string   `json:"name"`
-	Status  string   `json:"status"`
-	Parent  *string  `json:"parent,omitempty"`
-	Aliases []string `json:"aliases,omitempty"`
-	Summary string   `json:"summary,omitempty"`
+	Slug   string  `json:"slug"`
+	Name   string  `json:"name"`
+	Status string  `json:"status"`
+	Parent *string `json:"parent,omitempty"`
+	// Domain and Sensitivity are omitted at their defaults (work, normal) so
+	// the compact listing only spends tokens on what is unusual.
+	Domain      string   `json:"domain,omitempty"`
+	Sensitivity string   `json:"sensitivity,omitempty"`
+	Aliases     []string `json:"aliases,omitempty"`
+	Summary     string   `json:"summary,omitempty"`
+}
+
+// DefaultProjectDomain and DefaultProjectSensitivity mirror the column
+// defaults in migrations/00022_project_domain.sql.
+const (
+	DefaultProjectDomain      = "work"
+	DefaultProjectSensitivity = "normal"
+)
+
+func briefDomain(d string) string {
+	if d == DefaultProjectDomain {
+		return ""
+	}
+	return d
+}
+
+func briefSensitivity(s string) string {
+	if s == DefaultProjectSensitivity {
+		return ""
+	}
+	return s
 }
 
 func ToProjectBriefs(rows []store.ListChildProjectsRow) []ProjectBrief {
 	out := make([]ProjectBrief, len(rows))
 	for i, r := range rows {
-		out[i] = ProjectBrief{Slug: r.Slug, Name: r.Name, Status: r.Status, Summary: r.Summary}
+		out[i] = ProjectBrief{
+			Slug: r.Slug, Name: r.Name, Status: r.Status, Summary: r.Summary,
+			Domain: briefDomain(r.Domain), Sensitivity: briefSensitivity(r.Sensitivity),
+		}
 	}
 	return out
 }

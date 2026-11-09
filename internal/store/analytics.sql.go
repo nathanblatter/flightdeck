@@ -72,7 +72,7 @@ func (q *Queries) CountDistinctItemsTouchedSince(ctx context.Context, arg CountD
 const listStaleInProgress = `-- name: ListStaleInProgress :many
 SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, i.due_at, p.slug AS project_slug
 FROM items i
-JOIN projects p ON p.id = i.project_id AND p.status = 'active'
+JOIN projects p ON p.id = i.project_id AND p.status = 'active' AND p.sensitivity <> 'private'
 WHERE i.deleted_at IS NULL AND i.status = 'in_progress' AND i.updated_at < $1
 ORDER BY i.updated_at ASC
 `
@@ -107,7 +107,8 @@ type ListStaleInProgressRow struct {
 	ProjectSlug        string          `json:"project_slug"`
 }
 
-// in_progress items whose last update is older than the cutoff.
+// in_progress items whose last update is older than the cutoff. Private
+// projects are skipped: this is a cross-project view with no slug named.
 func (q *Queries) ListStaleInProgress(ctx context.Context, updatedAt time.Time) ([]ListStaleInProgressRow, error) {
 	rows, err := q.db.Query(ctx, listStaleInProgress, updatedAt)
 	if err != nil {
@@ -157,10 +158,10 @@ func (q *Queries) ListStaleInProgress(ctx context.Context, updatedAt time.Time) 
 }
 
 const listStaleProjectSummaries = `-- name: ListStaleProjectSummaries :many
-SELECT p.id, p.slug, p.name, p.status, p.summary, p.repo_url, p.site_url, p.created_at, p.updated_at, p.instructions, p.item_seq, p.aliases, p.parent_slug, max(a.created_at)::timestamptz AS last_activity
+SELECT p.id, p.slug, p.name, p.status, p.summary, p.repo_url, p.site_url, p.created_at, p.updated_at, p.instructions, p.item_seq, p.aliases, p.parent_slug, p.domain, p.sensitivity, max(a.created_at)::timestamptz AS last_activity
 FROM projects p
 JOIN activity a ON a.project_id = p.id
-WHERE p.status = 'active'
+WHERE p.status = 'active' AND p.sensitivity <> 'private'
 GROUP BY p.id
 HAVING max(a.created_at) > p.updated_at + interval '1 hour'
 ORDER BY max(a.created_at) DESC
@@ -180,6 +181,8 @@ type ListStaleProjectSummariesRow struct {
 	ItemSeq      int64     `json:"item_seq"`
 	Aliases      []string  `json:"aliases"`
 	ParentSlug   *string   `json:"parent_slug"`
+	Domain       string    `json:"domain"`
+	Sensitivity  string    `json:"sensitivity"`
 	LastActivity time.Time `json:"last_activity"`
 }
 
@@ -207,6 +210,8 @@ func (q *Queries) ListStaleProjectSummaries(ctx context.Context) ([]ListStalePro
 			&i.ItemSeq,
 			&i.Aliases,
 			&i.ParentSlug,
+			&i.Domain,
+			&i.Sensitivity,
 			&i.LastActivity,
 		); err != nil {
 			return nil, err
@@ -222,7 +227,7 @@ func (q *Queries) ListStaleProjectSummaries(ctx context.Context) ([]ListStalePro
 const listUntriagedBugs = `-- name: ListUntriagedBugs :many
 SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, i.due_at, p.slug AS project_slug
 FROM items i
-JOIN projects p ON p.id = i.project_id AND p.status = 'active'
+JOIN projects p ON p.id = i.project_id AND p.status = 'active' AND p.sensitivity <> 'private'
 WHERE i.deleted_at IS NULL AND i.type = 'bug' AND i.status = 'backlog' AND i.created_at < $1
 ORDER BY i.created_at ASC
 `

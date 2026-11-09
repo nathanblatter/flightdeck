@@ -14,6 +14,11 @@ export function clearApiKey() {
 }
 
 export type ProjectStatus = "active" | "paused" | "done" | "archived";
+// Which part of life a project belongs to, and whether it is kept out of
+// cross-project agent surfaces (private). The web UI shows everything.
+export type ProjectDomain = "life" | "school" | "work";
+export type ProjectSensitivity = "normal" | "private";
+export const PROJECT_DOMAINS: ProjectDomain[] = ["life", "school", "work"];
 
 /** A live link between this project and one on another flightdeck instance. */
 export interface Share {
@@ -60,6 +65,8 @@ export interface Project {
   status: ProjectStatus;
   // Slug of the parent project when nested in a tree; absent for roots.
   parent?: string;
+  domain: ProjectDomain;
+  sensitivity: ProjectSensitivity;
   summary: string;
   repo_url?: string;
   site_url?: string;
@@ -72,6 +79,9 @@ export interface ProjectBrief {
   slug: string;
   name: string;
   status: ProjectStatus;
+  // Omitted by the server at their defaults (work / normal).
+  domain?: ProjectDomain;
+  sensitivity?: ProjectSensitivity;
   summary?: string;
 }
 
@@ -394,10 +404,23 @@ export const api = {
     req<ProjectContext>("GET", `/context/${slug}`),
   webhookEvents: () => req<WebhookEvent[]>("GET", "/webhooks/events"),
   // `parent` is tri-state: omit = leave, "" = clear (make root), slug = nest.
-  patchProject: (slug: string, body: Partial<Pick<Project, "name" | "status" | "summary" | "repo_url" | "site_url" | "parent">>) =>
-    req<Project>("PATCH", `/projects/${slug}`, body),
-  createProject: (body: { slug: string; name: string; summary?: string; parent?: string }) =>
-    req<Project>("POST", "/projects", body),
+  patchProject: (
+    slug: string,
+    body: Partial<
+      Pick<
+        Project,
+        "name" | "status" | "summary" | "repo_url" | "site_url" | "parent" | "domain" | "sensitivity"
+      >
+    >,
+  ) => req<Project>("PATCH", `/projects/${slug}`, body),
+  createProject: (body: {
+    slug: string;
+    name: string;
+    summary?: string;
+    parent?: string;
+    domain?: ProjectDomain;
+    sensitivity?: ProjectSensitivity;
+  }) => req<Project>("POST", "/projects", body),
   shares: () => req<Share[]>("GET", "/shares"),
   // The invite carries the project's encryption key and is returned exactly
   // once — it is never retrievable again, only revoked and re-issued.

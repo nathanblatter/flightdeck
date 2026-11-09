@@ -37,5 +37,7 @@ SELECT a.*, ts_rank(a.search, plainto_tsquery('english', sqlc.arg('q'))) AS rank
 FROM activity a
 WHERE a.search @@ plainto_tsquery('english', sqlc.arg('q'))
   AND (sqlc.narg('project_id')::uuid IS NULL OR a.project_id = sqlc.narg('project_id'))
+  AND (sqlc.narg('project_id')::uuid IS NOT NULL OR NOT EXISTS (
+        SELECT 1 FROM projects pp WHERE pp.id = a.project_id AND pp.sensitivity = 'private'))
 ORDER BY rank DESC
 LIMIT COALESCE(sqlc.narg('lim')::int, 50);

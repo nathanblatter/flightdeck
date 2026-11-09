@@ -90,7 +90,7 @@ const orientNudge = "flightdeck: this session wrote before reading project conte
 var writeTools = map[string]bool{
 	"create_item": true, "create_items": true, "update_item": true, "complete_item": true,
 	"log_activity": true, "update_project_summary": true, "set_project_instructions": true,
-	"create_project": true, "archive_project": true, "link_items": true, "unlink_items": true,
+	"create_project": true, "update_project": true, "archive_project": true, "link_items": true, "unlink_items": true,
 	"add_item_ref": true,
 }
 
@@ -334,6 +334,7 @@ func verbosityOf(p *string) service.Verbosity {
 
 type listProjectsIn struct {
 	Status    *string `json:"status,omitempty" jsonschema:"filter by status: active|paused|done|archived"`
+	Domain    *string `json:"domain,omitempty" jsonschema:"filter by domain: life|school|work (absent = all)"`
 	Verbosity *string `json:"verbosity,omitempty" jsonschema:"compact (default: slug, name, status, parent, aliases, first summary sentence) | full (every field incl. instructions)"`
 }
 type projectsOut struct {
@@ -349,6 +350,7 @@ type slugIn struct {
 }
 
 type globalIn struct {
+	Domain    *string `json:"domain,omitempty" jsonschema:"limit the map to one domain: life|school|work (absent = all domains)"`
 	Verbosity *string `json:"verbosity,omitempty" jsonschema:"compact (default) | full (adds each project's instructions)"`
 }
 
@@ -476,6 +478,18 @@ type createProjectIn struct {
 	RepoURL      *string  `json:"repo_url,omitempty"`
 	SiteURL      *string  `json:"site_url,omitempty"`
 	Parent       *string  `json:"parent,omitempty" jsonschema:"slug of an existing project to nest this one under (projects form a tree; omit for a root)"`
+	Domain       *string  `json:"domain,omitempty" jsonschema:"life|school|work (default work)"`
+	Sensitivity  *string  `json:"sensitivity,omitempty" jsonschema:"normal|private (default normal); private projects are omitted from get_global_context, list_projects and search unless the call names the slug"`
+}
+
+type updateProjectIn struct {
+	Slug        string  `json:"slug" jsonschema:"project slug"`
+	Name        *string `json:"name,omitempty" jsonschema:"new display name"`
+	Status      *string `json:"status,omitempty" jsonschema:"active|paused|done|archived (pause a project idle ~2 weeks; set active when work resumes)"`
+	Domain      *string `json:"domain,omitempty" jsonschema:"life|school|work"`
+	Sensitivity *string `json:"sensitivity,omitempty" jsonschema:"normal|private"`
+	RepoURL     *string `json:"repo_url,omitempty"`
+	SiteURL     *string `json:"site_url,omitempty"`
 }
 
 type setInstructionsIn struct {
@@ -522,7 +536,7 @@ type usageReportIn struct {
 func (h *handlers) register(s *mcpsdk.Server) {
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "list_projects",
-		Description: "List projects (slug, name, status, parent, first summary sentence), optionally filtered by status. To map your cwd or git remote to a slug use resolve_project; for a project's full summary and instructions use get_project_context. verbosity=full returns every field.",
+		Description: "List projects (slug, name, status, parent, first summary sentence), optionally filtered by status or domain (life|school|work). Private projects are omitted. To map your cwd or git remote to a slug use resolve_project; for a project's full summary and instructions use get_project_context. verbosity=full returns every field.",
 	}, h.listProjects)
 
 	addTool(h, s, &mcpsdk.Tool{
@@ -532,7 +546,7 @@ func (h *handlers) register(s *mcpsdk.Server) {
 
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "get_global_context",
-		Description: "Horizontal 'load the map' view across all active projects: opens with the 7-day agenda (overdue + upcoming dated items), then each project's summary, counts and top items.",
+		Description: "Horizontal 'load the map' view across active projects: opens with the 7-day agenda (overdue + upcoming dated items), then each project's summary, counts and top items. Pass domain=life|school|work to load one part of the map. Private projects are omitted; name them with get_project_context.",
 	}, h.getGlobalContext)
 
 	addTool(h, s, &mcpsdk.Tool{
@@ -587,8 +601,13 @@ func (h *handlers) register(s *mcpsdk.Server) {
 
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "create_project",
-		Description: "Register a new tracked project (slug + name, optional status/summary/instructions/urls/aliases).",
+		Description: "Register a new tracked project (slug + name, optional status/summary/instructions/urls/aliases/domain/sensitivity).",
 	}, h.createProject)
+
+	addTool(h, s, &mcpsdk.Tool{
+		Name:        "update_project",
+		Description: "Patch a project's fields: name, status (active|paused|done|archived), domain (life|school|work), sensitivity (normal|private), repo_url, site_url. Omitted fields are left unchanged. Summary and instructions have their own tools.",
+	}, h.updateProject)
 
 	addTool(h, s, &mcpsdk.Tool{
 		Name:        "resolve_project",
@@ -656,7 +675,12 @@ func (h *handlers) register(s *mcpsdk.Server) {
 // call — paid in tokens on every lookup. REST /api/projects is unchanged;
 // the UI wants the full rows.
 func (h *handlers) listProjects(ctx context.Context, _ *mcpsdk.CallToolRequest, in listProjectsIn) (any, error) {
-	projects, err := h.st.ListProjects(ctx, optStr(in.Status))
+	if err := service.ValidateProjectDomain(in.Domain); err != nil {
+		return nil, err
+	}
+	projects, err := h.st.ListProjects(ctx, store.ListProjectsParams{
+		Status: optStr(in.Status), Domain: optStr(in.Domain), IncludePrivate: false,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -686,7 +710,14 @@ func (h *handlers) getAgenda(ctx context.Context, _ *mcpsdk.CallToolRequest, in 
 }
 
 func (h *handlers) getGlobalContext(ctx context.Context, _ *mcpsdk.CallToolRequest, in globalIn) (dto.GlobalContext, error) {
-	bundle, err := h.svc.GlobalContext(ctx, verbosityOf(in.Verbosity))
+	if err := service.ValidateProjectDomain(in.Domain); err != nil {
+		return dto.GlobalContext{}, err
+	}
+	var domain string
+	if in.Domain != nil {
+		domain = *in.Domain
+	}
+	bundle, err := h.svc.GlobalContext(ctx, verbosityOf(in.Verbosity), domain)
 	if err != nil {
 		return dto.GlobalContext{}, err
 	}
@@ -999,7 +1030,7 @@ func (h *handlers) createProject(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	if in.Slug == "" || in.Name == "" {
 		return dto.Project{}, fmt.Errorf("slug and name are required")
 	}
-	if err := service.ValidateProjectStatus(in.Status); err != nil {
+	if err := service.ValidateProjectTags(in.Status, in.Domain, in.Sensitivity); err != nil {
 		return dto.Project{}, err
 	}
 	var parent *string
@@ -1020,6 +1051,33 @@ func (h *handlers) createProject(ctx context.Context, _ *mcpsdk.CallToolRequest,
 		RepoUrl:      optStr(in.RepoURL),
 		SiteUrl:      optStr(in.SiteURL),
 		ParentSlug:   parent,
+		Domain:       optStr(in.Domain),
+		Sensitivity:  optStr(in.Sensitivity),
+	})
+	if err != nil {
+		return dto.Project{}, err
+	}
+	return dto.ToProject(p), nil
+}
+
+// updateProject patches the project fields that had no MCP path before
+// (status, domain, sensitivity, name, urls) — the pause policy used to send
+// agents to the HTTP API for this.
+func (h *handlers) updateProject(ctx context.Context, _ *mcpsdk.CallToolRequest, in updateProjectIn) (dto.Project, error) {
+	if strings.TrimSpace(in.Slug) == "" {
+		return dto.Project{}, fmt.Errorf("slug is required")
+	}
+	if err := service.ValidateProjectTags(in.Status, in.Domain, in.Sensitivity); err != nil {
+		return dto.Project{}, err
+	}
+	p, err := h.svc.UpdateProject(ctx, store.UpdateProjectParams{
+		Slug:        in.Slug,
+		Name:        optStr(in.Name),
+		Status:      optStr(in.Status),
+		RepoUrl:     optStr(in.RepoURL),
+		SiteUrl:     optStr(in.SiteURL),
+		Domain:      optStr(in.Domain),
+		Sensitivity: optStr(in.Sensitivity),
 	})
 	if err != nil {
 		return dto.Project{}, err

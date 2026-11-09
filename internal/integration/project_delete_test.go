@@ -25,7 +25,7 @@ func TestArchiveHidesProject(t *testing.T) {
 		t.Fatalf("archive: %v", err)
 	}
 
-	listed, err := st.ListProjects(ctx, nil)
+	listed, err := st.ListProjects(ctx, store.ListProjectsParams{IncludePrivate: true})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestArchiveHidesProject(t *testing.T) {
 	}
 	// ...but is still there when asked for by status, with its items intact.
 	archived := "archived"
-	if listed, err = st.ListProjects(ctx, &archived); err != nil {
+	if listed, err = st.ListProjects(ctx, store.ListProjectsParams{Status: &archived, IncludePrivate: true}); err != nil {
 		t.Fatalf("list archived: %v", err)
 	}
 	if len(listed) != 1 || listed[0].Slug != p.Slug {

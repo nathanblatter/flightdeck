@@ -8,15 +8,20 @@ SELECT * FROM projects WHERE id = $1;
 -- Archived projects are excluded unless asked for by name (status='archived').
 -- That exclusion is what makes archiving mean something: without it 'archived'
 -- is just a label and the project still clutters every orient read and picker.
+-- domain narrows to one of life|school|work. include_private=false drops
+-- sensitivity='private' projects: cross-project surfaces (MCP list_projects,
+-- global context) pass false; resolvers and the single-user web UI pass true.
 SELECT * FROM projects
 WHERE (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status'))
   AND (sqlc.narg('status')::text IS NOT NULL OR status <> 'archived')
+  AND (sqlc.narg('domain')::text IS NULL OR domain = sqlc.narg('domain'))
+  AND (sqlc.arg('include_private')::bool OR sensitivity <> 'private')
 ORDER BY
     CASE status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 WHEN 'done' THEN 2 ELSE 3 END,
     updated_at DESC;
 
 -- name: CreateProject :one
-INSERT INTO projects (slug, name, status, summary, instructions, repo_url, site_url, aliases, parent_slug)
+INSERT INTO projects (slug, name, status, summary, instructions, repo_url, site_url, aliases, parent_slug, domain, sensitivity)
 VALUES (
     $1,
     $2,
@@ -26,7 +31,9 @@ VALUES (
     sqlc.narg('repo_url'),
     sqlc.narg('site_url'),
     COALESCE(sqlc.narg('aliases')::text[], '{}'),
-    sqlc.narg('parent_slug')
+    sqlc.narg('parent_slug'),
+    COALESCE(sqlc.narg('domain')::text, 'work'),
+    COALESCE(sqlc.narg('sensitivity')::text, 'normal')
 )
 RETURNING *;
 
@@ -41,6 +48,8 @@ UPDATE projects SET
     repo_url     = COALESCE(sqlc.narg('repo_url')::text, repo_url),
     site_url     = COALESCE(sqlc.narg('site_url')::text, site_url),
     aliases      = COALESCE(sqlc.narg('aliases')::text[], aliases),
+    domain       = COALESCE(sqlc.narg('domain')::text, domain),
+    sensitivity  = COALESCE(sqlc.narg('sensitivity')::text, sensitivity),
     parent_slug  = CASE WHEN sqlc.arg('set_parent')::bool
                         THEN sqlc.narg('parent_slug')::text
                         ELSE parent_slug END,
@@ -60,7 +69,7 @@ WITH RECURSIVE subtree (slug) AS (
 SELECT s.slug FROM subtree s;
 
 -- name: ListChildProjects :many
-SELECT slug, name, status, summary FROM projects
+SELECT slug, name, status, summary, domain, sensitivity FROM projects
 WHERE parent_slug = $1
 ORDER BY name;
 

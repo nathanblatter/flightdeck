@@ -39,6 +39,7 @@ WHERE l.kind = 'blocks' AND b.status NOT IN ('done', 'wontfix');
 -- name: ListReadyItems :many
 -- Open items across active projects that are NOT blocked by any open blocker,
 -- ranked for "what should I work on": priority, then in_progress/todo, then age.
+-- Private projects are included only when asked for by project_id.
 SELECT i.*, p.slug AS project_slug
 FROM items i
 JOIN projects p ON p.id = i.project_id AND p.status = 'active'
@@ -46,6 +47,7 @@ WHERE i.deleted_at IS NULL
   AND i.status NOT IN ('done', 'wontfix')
   AND i.type <> 'reference'
   AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
+  AND (sqlc.narg('project_id')::uuid IS NOT NULL OR p.sensitivity <> 'private')
   AND NOT EXISTS (
       SELECT 1 FROM item_links l
       JOIN items b ON b.id = l.from_item_id AND b.deleted_at IS NULL
