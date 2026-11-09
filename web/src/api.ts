@@ -105,6 +105,9 @@ export interface Item {
   closed_at?: string;
   // Optional due date (RFC3339). Dated items feed the Agenda view.
   due_at?: string;
+  // Recurrence rule: an interval (P1Y, P6M, P10D) applied to due_at on
+  // completion, or free text an agent interprets. Completing spawns the next.
+  recur?: string;
   version: number;
   // Set on list/context responses when an open item with a `blocks` link
   // points at this one; blocked_by carries the blocker titles.
@@ -364,9 +367,10 @@ export const api = {
     tags?: string[];
     // RFC3339 or YYYY-MM-DD (a bare date means end of that day).
     due_at?: string;
+    recur?: string;
   }) => req<Item>("POST", "/items", body),
-  // due_at: absent keeps it, "" clears it, a value replaces it.
-  patchItem: (id: string, body: Partial<Pick<Item, "status" | "priority" | "assignee" | "body" | "title" | "tags" | "position" | "due_at">>) =>
+  // due_at / recur: absent keeps it, "" clears it, a value replaces it.
+  patchItem: (id: string, body: Partial<Pick<Item, "status" | "priority" | "assignee" | "body" | "title" | "tags" | "position" | "due_at" | "recur">>) =>
     req<Item>("PATCH", `/items/${id}`, body),
   agenda: (days?: number) =>
     req<Agenda>("GET", `/agenda${qs({ days: days === undefined ? undefined : String(days) })}`),

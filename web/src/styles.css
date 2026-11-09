@@ -460,6 +460,20 @@ textarea {
   gap: 2px;
 }
 
+.recur-badge {
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: help;
+}
+
 .blocked-badge {
   font-size: 11px;
   font-weight: 600;

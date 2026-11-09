@@ -78,6 +78,11 @@ export function Card({
             {formatDue(item.due_at)}
           </span>
         )}
+        {item.recur && (
+          <span className="recur-badge" title={`Recurs: ${item.recur}`}>
+            ↻ {item.recur}
+          </span>
+        )}
         {item.assignee && <span className="assignee">@{item.assignee}</span>}
         {item.tags.map((t) => (
           <span key={t} className="tag">

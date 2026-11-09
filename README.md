@@ -67,7 +67,7 @@ docker compose exec flightdeck flightdeck keys revoke <id>
 - `GET /stale?in_progress_days=&bug_days=` — idle in_progress items, untriaged bugs, stale summaries
 - `POST /links` `{from, to, kind}` · `DELETE /links/{id}` · `GET /items/{id}/links` — item dependencies (`blocks`|`relates_to`|`parent_of`)
 - `POST /items/{id}/refs` `{kind, ref, label?}` · `GET /items/{id}/refs` · `DELETE /refs/{id}` — code grounding (`commit`|`file`|`pr`|`branch`|`url`)
-- items accept `idempotency_key` (safe-retry create) and `acceptance_criteria` (`[{text, done}]`, definition-of-done); activity accepts `confidence` (`unspecified`|`inferred`|`confirmed`) and a `rejected` kind for dead-end approaches
+- items accept `idempotency_key` (safe-retry create), `acceptance_criteria` (`[{text, done}]`, definition-of-done) and `recur` (an interval `P<n>D|W|M|Y` applied to `due_at`, or free text an agent interprets — completing a recurring item spawns its successor, linked `relates_to` and returned as `spawned`; empty string clears it on PATCH); activity accepts `confidence` (`unspecified`|`inferred`|`confirmed`) and a `rejected` kind for dead-end approaches
 - `GET/POST /webhooks`, `DELETE /webhooks/{id}` — event subscribers (`{project?, url, events?, secret?}`)
 - `GET /search?q=` — cascading recall over items + activity: Postgres full-text → semantic (pgvector cosine) → trigram fuzzy
 - `POST /ingest/bug` — `{site, url, message, severity?, meta?}` (ingest scope; CORS-enabled and per-IP rate-limited for cross-site widget use)

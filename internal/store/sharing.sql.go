@@ -85,7 +85,7 @@ func (q *Queries) DeleteProjectShare(ctx context.Context, id uuid.UUID) error {
 }
 
 const getItemForSync = `-- name: GetItemForSync :one
-SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at FROM items WHERE id = $1
+SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at, recur FROM items WHERE id = $1
 `
 
 func (q *Queries) GetItemForSync(ctx context.Context, id uuid.UUID) (Item, error) {
@@ -118,6 +118,7 @@ func (q *Queries) GetItemForSync(ctx context.Context, id uuid.UUID) (Item, error
 		&i.Embedding,
 		&i.EmbeddingModel,
 		&i.DueAt,
+		&i.Recur,
 	)
 	return i, err
 }
@@ -257,7 +258,7 @@ func (q *Queries) ListEnabledProjectShares(ctx context.Context) ([]ProjectShare,
 }
 
 const listItemsForSync = `-- name: ListItemsForSync :many
-SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at FROM items WHERE project_id = $1
+SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at, recur FROM items WHERE project_id = $1
 `
 
 // Everything in the project, soft-deleted rows included: a deletion is a change
@@ -298,6 +299,7 @@ func (q *Queries) ListItemsForSync(ctx context.Context, projectID uuid.UUID) ([]
 			&i.Embedding,
 			&i.EmbeddingModel,
 			&i.DueAt,
+			&i.Recur,
 		); err != nil {
 			return nil, err
 		}
@@ -626,7 +628,7 @@ ON CONFLICT (id) DO UPDATE SET
     embedding           = NULL,
     embedding_model     = '',
     version             = items.version + 1
-RETURNING id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at
+RETURNING id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at, recur
 `
 
 type UpsertSyncedItemParams struct {
@@ -700,6 +702,7 @@ func (q *Queries) UpsertSyncedItem(ctx context.Context, arg UpsertSyncedItemPara
 		&i.Embedding,
 		&i.EmbeddingModel,
 		&i.DueAt,
+		&i.Recur,
 	)
 	return i, err
 }

@@ -47,7 +47,7 @@ ORDER BY position ASC, title ASC
 LIMIT $2;
 
 -- name: CreateItem :one
-INSERT INTO items (project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, idempotency_key, acceptance_criteria, due_at)
+INSERT INTO items (project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, idempotency_key, acceptance_criteria, due_at, recur)
 VALUES (
     $1,
     COALESCE(sqlc.narg('type')::text, 'task'),
@@ -63,7 +63,8 @@ VALUES (
     COALESCE(sqlc.narg('metadata')::jsonb, '{}'),
     sqlc.narg('idempotency_key'),
     COALESCE(sqlc.narg('acceptance_criteria')::jsonb, '[]'),
-    sqlc.narg('due_at')::timestamptz
+    sqlc.narg('due_at')::timestamptz,
+    sqlc.narg('recur')::text
 )
 RETURNING *;
 
@@ -85,6 +86,11 @@ UPDATE items SET
     due_at    = CASE
                     WHEN sqlc.arg('clear_due_at')::bool THEN NULL
                     ELSE COALESCE(sqlc.narg('due_at')::timestamptz, due_at)
+                END,
+    -- recur: same three-way convention as due_at.
+    recur     = CASE
+                    WHEN sqlc.arg('clear_recur')::bool THEN NULL
+                    ELSE COALESCE(sqlc.narg('recur')::text, recur)
                 END,
     closed_at = CASE
                     WHEN COALESCE(sqlc.narg('status')::text, status) IN ('done', 'wontfix')

@@ -100,7 +100,7 @@ func (q *Queries) MarkItemEmbeddingFailed(ctx context.Context, id uuid.UUID) err
 }
 
 const searchItemsSemantic = `-- name: SearchItemsSemantic :many
-SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, i.due_at, (i.embedding <=> $1::vector) AS distance
+SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, i.due_at, i.recur, (i.embedding <=> $1::vector) AS distance
 FROM items i
 WHERE i.deleted_at IS NULL
   AND i.embedding IS NOT NULL
@@ -148,6 +148,7 @@ type SearchItemsSemanticRow struct {
 	Embedding          pgvec.Vector    `json:"embedding"`
 	EmbeddingModel     string          `json:"embedding_model"`
 	DueAt              *time.Time      `json:"due_at"`
+	Recur              *string         `json:"recur"`
 	Distance           interface{}     `json:"distance"`
 }
 
@@ -197,6 +198,7 @@ func (q *Queries) SearchItemsSemantic(ctx context.Context, arg SearchItemsSemant
 			&i.Embedding,
 			&i.EmbeddingModel,
 			&i.DueAt,
+			&i.Recur,
 			&i.Distance,
 		); err != nil {
 			return nil, err
