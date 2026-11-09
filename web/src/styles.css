@@ -719,3 +719,69 @@ textarea {
   padding: 3px 8px;
   font-size: 12px;
 }
+
+/* --- due dates + agenda --- */
+.due-badge {
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.due-badge.overdue {
+  font-weight: 600;
+  color: #f85149;
+  background: rgba(248, 81, 73, 0.12);
+  border-color: rgba(248, 81, 73, 0.4);
+}
+.agenda {
+  max-width: 980px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.agenda-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.agenda-nudge {
+  font-size: 13px;
+  color: #f85149;
+  background: rgba(248, 81, 73, 0.08);
+  border: 1px solid rgba(248, 81, 73, 0.3);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.agenda-section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.agenda-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+}
+.agenda-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-top: 1px solid var(--border);
+}
+.agenda-row:first-child {
+  border-top: 0;
+}
+.agenda-row:hover {
+  background: var(--panel-2);
+}
+.agenda-title {
+  flex: 1;
+  line-height: 1.35;
+}

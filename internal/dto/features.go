@@ -73,7 +73,7 @@ func ReadyRowToItem(r store.ListReadyItemsRow) ItemWithProject {
 		ID: r.ID, Ref: r.Ref, ProjectID: r.ProjectID, Type: r.Type, Title: r.Title, Body: r.Body,
 		Status: r.Status, Priority: r.Priority, Assignee: r.Assignee, Position: r.Position,
 		Source: r.Source, ExternalRef: r.ExternalRef, Tags: r.Tags, Metadata: r.Metadata,
-		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, ClosedAt: r.ClosedAt,
+		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, ClosedAt: r.ClosedAt, DueAt: r.DueAt,
 	}), ProjectSlug: r.ProjectSlug}
 }
 
@@ -84,7 +84,7 @@ func TopOpenRowToItem(r store.ListTopOpenItemsPerProjectRow, maxBody int) Item {
 		ID: r.ID, Ref: r.Ref, ProjectID: r.ProjectID, Type: r.Type, Title: r.Title, Body: r.Body,
 		Status: r.Status, Priority: r.Priority, Assignee: r.Assignee, Position: r.Position,
 		Source: r.Source, ExternalRef: r.ExternalRef, Tags: r.Tags, Metadata: r.Metadata,
-		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, ClosedAt: r.ClosedAt,
+		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, ClosedAt: r.ClosedAt, DueAt: r.DueAt,
 	}, maxBody)
 }
 
@@ -93,7 +93,7 @@ func StaleInProgressToItem(r store.ListStaleInProgressRow) ItemWithProject {
 		ID: r.ID, Ref: r.Ref, ProjectID: r.ProjectID, Type: r.Type, Title: r.Title, Body: r.Body,
 		Status: r.Status, Priority: r.Priority, Assignee: r.Assignee, Position: r.Position,
 		Source: r.Source, ExternalRef: r.ExternalRef, Tags: r.Tags, Metadata: r.Metadata,
-		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, ClosedAt: r.ClosedAt,
+		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, ClosedAt: r.ClosedAt, DueAt: r.DueAt,
 	}), ProjectSlug: r.ProjectSlug}
 }
 
@@ -102,7 +102,7 @@ func UntriagedBugToItem(r store.ListUntriagedBugsRow) ItemWithProject {
 		ID: r.ID, Ref: r.Ref, ProjectID: r.ProjectID, Type: r.Type, Title: r.Title, Body: r.Body,
 		Status: r.Status, Priority: r.Priority, Assignee: r.Assignee, Position: r.Position,
 		Source: r.Source, ExternalRef: r.ExternalRef, Tags: r.Tags, Metadata: r.Metadata,
-		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, ClosedAt: r.ClosedAt,
+		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, ClosedAt: r.ClosedAt, DueAt: r.DueAt,
 	}), ProjectSlug: r.ProjectSlug}
 }
 

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -33,6 +34,11 @@ func (s *Server) listItems(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid updated_since (want RFC3339)")
 		return
 	}
+	dueBefore, err := service.ParseDue(q.Get("due_before"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	lim, err := optInt32(q, "limit")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid limit")
@@ -45,6 +51,7 @@ func (s *Server) listItems(w http.ResponseWriter, r *http.Request) {
 		Assignee:     optStr(q, "assignee"),
 		Tag:          optStr(q, "tag"),
 		UpdatedSince: since,
+		DueBefore:    dueBefore,
 		Q:            optStr(q, "q"),
 		Lim:          lim,
 	})
@@ -114,6 +121,7 @@ type createItemReq struct {
 	Metadata           json.RawMessage `json:"metadata"`
 	IdempotencyKey     *string         `json:"idempotency_key"`
 	AcceptanceCriteria json.RawMessage `json:"acceptance_criteria"`
+	DueAt              *string         `json:"due_at"` // RFC3339 or YYYY-MM-DD
 }
 
 func (s *Server) createItem(w http.ResponseWriter, r *http.Request) {
@@ -139,6 +147,11 @@ func (s *Server) createItem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "project (slug) or project_id is required")
 		return
 	}
+	dueAt, err := service.ParseDue(derefStr(req.DueAt))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	item, err := s.Svc.CreateItem(r.Context(), store.CreateItemParams{
 		ProjectID:          projectID,
 		Type:               req.Type,
@@ -154,6 +167,7 @@ func (s *Server) createItem(w http.ResponseWriter, r *http.Request) {
 		Metadata:           req.Metadata,
 		IdempotencyKey:     req.IdempotencyKey,
 		AcceptanceCriteria: req.AcceptanceCriteria,
+		DueAt:              dueAt,
 	}, auth.Actor(r.Context()))
 	if err != nil {
 		writeDBError(w, err)
@@ -174,6 +188,7 @@ type patchItemReq struct {
 	Metadata           json.RawMessage `json:"metadata"`
 	AcceptanceCriteria json.RawMessage `json:"acceptance_criteria"`
 	ExpectedVersion    *int32          `json:"expected_version"`
+	DueAt              *string         `json:"due_at"` // absent keeps, "" clears, value replaces
 }
 
 func (s *Server) patchItem(w http.ResponseWriter, r *http.Request) {
@@ -191,6 +206,16 @@ func (s *Server) patchItem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	var dueAt *time.Time
+	clearDue := false
+	if req.DueAt != nil {
+		if *req.DueAt == "" {
+			clearDue = true
+		} else if dueAt, err = service.ParseDue(*req.DueAt); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	item, err := s.Svc.UpdateItem(r.Context(), store.UpdateItemParams{
 		ID:                 id,
 		Title:              req.Title,
@@ -204,6 +229,8 @@ func (s *Server) patchItem(w http.ResponseWriter, r *http.Request) {
 		Metadata:           req.Metadata,
 		AcceptanceCriteria: req.AcceptanceCriteria,
 		ExpectedVersion:    req.ExpectedVersion,
+		DueAt:              dueAt,
+		ClearDueAt:         clearDue,
 	}, auth.Actor(r.Context()))
 	if err != nil {
 		writeDBError(w, err)
@@ -223,6 +250,13 @@ func (s *Server) deleteItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func derefStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // resolveProjectID turns an explicit project_id or a project slug into a UUID.

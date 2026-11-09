@@ -100,6 +100,12 @@ type Querier interface {
 	// Any activity with a non-empty body that has no embedding yet. Rows with a 'failed' marker are poison
 	// and skipped. Activity is immutable, so there is no re-embed-on-edit path.
 	ListActivityNeedingEmbedding(ctx context.Context, lim int32) ([]ListActivityNeedingEmbeddingRow, error)
+	// Dated open items across active projects, due on or before the horizon,
+	// oldest due first — so overdue rows lead. last_activity is the newest activity
+	// row on the item (its creation when the log was trimmed): an overdue item
+	// with no activity since its due date has quietly expired, and the agenda
+	// flags it.
+	ListAgendaItems(ctx context.Context, arg ListAgendaItemsParams) ([]ListAgendaItemsRow, error)
 	// Object keys owned by a project's items, collected before a purge so the
 	// blobs can be removed — the attachment rows cascade away with the items and
 	// would otherwise leave the objects orphaned in S3/MinIO forever.

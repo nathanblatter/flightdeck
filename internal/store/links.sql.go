@@ -167,7 +167,7 @@ func (q *Queries) ListOpenBlockingEdges(ctx context.Context) ([]ListOpenBlocking
 }
 
 const listReadyItems = `-- name: ListReadyItems :many
-SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, p.slug AS project_slug
+SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, i.due_at, p.slug AS project_slug
 FROM items i
 JOIN projects p ON p.id = i.project_id AND p.status = 'active'
 WHERE i.deleted_at IS NULL
@@ -217,6 +217,7 @@ type ListReadyItemsRow struct {
 	Version            int32           `json:"version"`
 	Embedding          pgvec.Vector    `json:"embedding"`
 	EmbeddingModel     string          `json:"embedding_model"`
+	DueAt              *time.Time      `json:"due_at"`
 	ProjectSlug        string          `json:"project_slug"`
 }
 
@@ -257,6 +258,7 @@ func (q *Queries) ListReadyItems(ctx context.Context, arg ListReadyItemsParams) 
 			&i.Version,
 			&i.Embedding,
 			&i.EmbeddingModel,
+			&i.DueAt,
 			&i.ProjectSlug,
 		); err != nil {
 			return nil, err

@@ -21,6 +21,7 @@ WHERE i.deleted_at IS NULL
   AND (sqlc.narg('tag')::text IS NULL OR sqlc.narg('tag')::text = ANY(i.tags))
   AND (sqlc.narg('updated_since')::timestamptz IS NULL OR i.updated_at >= sqlc.narg('updated_since'))
   AND (sqlc.narg('q')::text IS NULL OR i.search @@ plainto_tsquery('english', sqlc.narg('q')))
+  AND (sqlc.narg('due_before')::timestamptz IS NULL OR (i.due_at IS NOT NULL AND i.due_at <= sqlc.narg('due_before')))
 ORDER BY i.position ASC, i.created_at DESC
 LIMIT COALESCE(sqlc.narg('lim')::int, 500)
 OFFSET COALESCE(sqlc.narg('off')::int, 0);
@@ -34,7 +35,7 @@ ORDER BY
 LIMIT $2;
 
 -- name: CreateItem :one
-INSERT INTO items (project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, idempotency_key, acceptance_criteria)
+INSERT INTO items (project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, idempotency_key, acceptance_criteria, due_at)
 VALUES (
     $1,
     COALESCE(sqlc.narg('type')::text, 'task'),
@@ -49,7 +50,8 @@ VALUES (
     COALESCE(sqlc.narg('tags')::text[], '{}'),
     COALESCE(sqlc.narg('metadata')::jsonb, '{}'),
     sqlc.narg('idempotency_key'),
-    COALESCE(sqlc.narg('acceptance_criteria')::jsonb, '[]')
+    COALESCE(sqlc.narg('acceptance_criteria')::jsonb, '[]'),
+    sqlc.narg('due_at')::timestamptz
 )
 RETURNING *;
 
@@ -67,6 +69,11 @@ UPDATE items SET
     tags      = COALESCE(sqlc.narg('tags')::text[], tags),
     metadata  = COALESCE(sqlc.narg('metadata')::jsonb, metadata),
     acceptance_criteria = COALESCE(sqlc.narg('acceptance_criteria')::jsonb, acceptance_criteria),
+    -- due_at: clear_due_at wipes it, a supplied value replaces it, absent keeps it.
+    due_at    = CASE
+                    WHEN sqlc.arg('clear_due_at')::bool THEN NULL
+                    ELSE COALESCE(sqlc.narg('due_at')::timestamptz, due_at)
+                END,
     closed_at = CASE
                     WHEN COALESCE(sqlc.narg('status')::text, status) IN ('done', 'wontfix')
                         THEN COALESCE(closed_at, now())
@@ -96,3 +103,20 @@ RETURNING *;
 UPDATE items SET deleted_at = now(), updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
+
+-- name: ListAgendaItems :many
+-- Dated open items across active projects, due on or before the horizon,
+-- oldest due first — so overdue rows lead. last_activity is the newest activity
+-- row on the item (its creation when the log was trimmed): an overdue item
+-- with no activity since its due date has quietly expired, and the agenda
+-- flags it.
+SELECT i.*, p.slug AS project_slug,
+       COALESCE((SELECT max(a.created_at) FROM activity a WHERE a.item_id = i.id), i.created_at)::timestamptz AS last_activity
+FROM items i
+JOIN projects p ON p.id = i.project_id AND p.status = 'active'
+WHERE i.deleted_at IS NULL
+  AND i.status NOT IN ('done', 'wontfix')
+  AND i.due_at IS NOT NULL
+  AND i.due_at <= sqlc.arg('horizon')::timestamptz
+ORDER BY i.due_at ASC, CASE i.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'med' THEN 2 ELSE 3 END
+LIMIT sqlc.arg('lim')::int;

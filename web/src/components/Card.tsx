@@ -1,6 +1,6 @@
 import { useDraggable } from "@dnd-kit/core";
 import type { Item, Project } from "../api";
-import { PRIORITY_COLOR, TYPE_GLYPH, projectColor } from "../lib";
+import { PRIORITY_COLOR, TYPE_GLYPH, formatDue, isOverdue, projectColor } from "../lib";
 
 export function Card({
   item,
@@ -64,6 +64,18 @@ export function Card({
             title={`Blocked by: ${(item.blocked_by ?? []).join(", ")}`}
           >
             ⛔ blocked
+          </span>
+        )}
+        {item.due_at && (
+          <span
+            className={`due-badge${
+              isOverdue(item.due_at) && item.status !== "done" && item.status !== "wontfix"
+                ? " overdue"
+                : ""
+            }`}
+            title={new Date(item.due_at).toLocaleString()}
+          >
+            {formatDue(item.due_at)}
           </span>
         )}
         {item.assignee && <span className="assignee">@{item.assignee}</span>}

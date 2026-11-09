@@ -87,6 +87,9 @@ type Item struct {
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 	ClosedAt    *time.Time     `json:"closed_at,omitempty"`
+	// DueAt is the optional date the item must be done by. Dated items feed the
+	// cross-project agenda and the overdue nudges on orient.
+	DueAt *time.Time `json:"due_at,omitempty"`
 	// Version is the optimistic-concurrency counter — pass it back as
 	// expected_version on update to detect a concurrent edit (conflict).
 	Version int `json:"version"`
@@ -145,7 +148,7 @@ func ToItemTrunc(i store.Item, maxBody int) Item {
 		ID: i.ID.String(), Ref: i.Ref, ProjectID: i.ProjectID.String(), Type: i.Type, Title: i.Title, Body: trunc(i.Body, maxBody),
 		Status: i.Status, Priority: i.Priority, Assignee: i.Assignee, Position: i.Position,
 		Source: i.Source, ExternalRef: i.ExternalRef, Tags: tags, Metadata: toMeta(i.Metadata),
-		CreatedAt: i.CreatedAt, UpdatedAt: i.UpdatedAt, ClosedAt: i.ClosedAt, Version: int(i.Version),
+		CreatedAt: i.CreatedAt, UpdatedAt: i.UpdatedAt, ClosedAt: i.ClosedAt, DueAt: i.DueAt, Version: int(i.Version),
 		AcceptanceCriteria: criteria, AcceptanceUnmet: unmet,
 	}
 }
@@ -179,6 +182,7 @@ type compactItem struct {
 	Tags               []string       `json:"tags,omitempty"`
 	Metadata           map[string]any `json:"metadata,omitempty"`
 	UpdatedAt          time.Time      `json:"updated_at"`
+	DueAt              *time.Time     `json:"due_at,omitempty"`
 	Blocked            bool           `json:"blocked,omitempty"`
 	BlockedBy          []string       `json:"blocked_by,omitempty"`
 	AcceptanceCriteria []Criterion    `json:"acceptance_criteria,omitempty"`
@@ -194,7 +198,7 @@ func (i Item) MarshalJSON() ([]byte, error) {
 	return json.Marshal(compactItem{
 		Ref: i.Ref, Type: i.Type, Title: i.Title, Body: i.Body, Status: i.Status, Priority: i.Priority,
 		Assignee: i.Assignee, ExternalRef: i.ExternalRef, Tags: i.Tags, Metadata: i.Metadata,
-		UpdatedAt: i.UpdatedAt, Blocked: i.Blocked, BlockedBy: i.BlockedBy,
+		UpdatedAt: i.UpdatedAt, DueAt: i.DueAt, Blocked: i.Blocked, BlockedBy: i.BlockedBy,
 		AcceptanceCriteria: i.AcceptanceCriteria, AcceptanceUnmet: i.AcceptanceUnmet,
 	})
 }
@@ -251,15 +255,16 @@ func firstSentence(s string) string {
 // ItemBrief is the lightest item shape — ref/title/status/priority — for "what's
 // next" lists where full item objects would just duplicate tokens.
 type ItemBrief struct {
-	Ref      string `json:"ref"`
-	Title    string `json:"title"`
-	Status   string `json:"status"`
-	Priority string `json:"priority"`
-	Type     string `json:"type"`
+	Ref      string     `json:"ref"`
+	Title    string     `json:"title"`
+	Status   string     `json:"status"`
+	Priority string     `json:"priority"`
+	Type     string     `json:"type"`
+	DueAt    *time.Time `json:"due_at,omitempty"`
 }
 
 func ToItemBrief(i Item) ItemBrief {
-	return ItemBrief{Ref: i.Ref, Title: i.Title, Status: i.Status, Priority: i.Priority, Type: i.Type}
+	return ItemBrief{Ref: i.Ref, Title: i.Title, Status: i.Status, Priority: i.Priority, Type: i.Type, DueAt: i.DueAt}
 }
 
 type Activity struct {
@@ -456,6 +461,10 @@ type ProjectOverview struct {
 
 // GlobalContext is the "load the map" payload across all active projects.
 type GlobalContext struct {
+	// Agenda leads the payload: what is due or overdue across every active
+	// project in the next week. It is the first thing an agent should read,
+	// because dated work expires on the calendar, not on the board.
+	Agenda   *Agenda           `json:"agenda,omitempty"`
 	Projects []ProjectOverview `json:"projects"`
 	// Notices are instance-level lines (e.g. "a newer flightdeck is released")
 	// surfaced at orient time, mirroring ProjectContext.Nudges.

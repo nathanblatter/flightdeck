@@ -24,6 +24,24 @@ func (s *Server) projectContext(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, bundle)
 }
 
+func (s *Server) agenda(w http.ResponseWriter, r *http.Request) {
+	days, err := optInt32(r.URL.Query(), "days")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid days")
+		return
+	}
+	n := 0
+	if days != nil {
+		n = int(*days)
+	}
+	out, err := s.Svc.Agenda(r.Context(), n)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) globalContext(w http.ResponseWriter, r *http.Request) {
 	bundle, err := s.Svc.GlobalContext(r.Context(), restVerbosity(r))
 	if err != nil {

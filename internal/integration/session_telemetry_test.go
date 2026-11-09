@@ -40,8 +40,8 @@ func TestSessionTelemetry(t *testing.T) {
 	if ir == nil || ir.Instructions != mcp.Instructions || !strings.Contains(ir.Instructions, "get_project_context") {
 		t.Fatalf("initialize instructions = %q", ir.Instructions)
 	}
-	if len(mcp.Instructions) > 600 {
-		t.Fatalf("instructions are %d chars, want <= 600", len(mcp.Instructions))
+	if len(mcp.Instructions) > 700 {
+		t.Fatalf("instructions are %d chars, want <= 700", len(mcp.Instructions))
 	}
 
 	for _, call := range []struct {

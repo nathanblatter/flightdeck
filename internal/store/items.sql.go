@@ -7,14 +7,16 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
+	pgvec "flightdeck/internal/pgvec"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createItem = `-- name: CreateItem :one
-INSERT INTO items (project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, idempotency_key, acceptance_criteria)
+INSERT INTO items (project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, idempotency_key, acceptance_criteria, due_at)
 VALUES (
     $1,
     COALESCE($2::text, 'task'),
@@ -29,26 +31,28 @@ VALUES (
     COALESCE($11::text[], '{}'),
     COALESCE($12::jsonb, '{}'),
     $13,
-    COALESCE($14::jsonb, '[]')
+    COALESCE($14::jsonb, '[]'),
+    $15::timestamptz
 )
-RETURNING id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model
+RETURNING id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at
 `
 
 type CreateItemParams struct {
-	ProjectID          uuid.UUID `json:"project_id"`
-	Type               *string   `json:"type"`
-	Title              string    `json:"title"`
-	Body               *string   `json:"body"`
-	Status             *string   `json:"status"`
-	Priority           *string   `json:"priority"`
-	Assignee           *string   `json:"assignee"`
-	Position           *float64  `json:"position"`
-	Source             *string   `json:"source"`
-	ExternalRef        *string   `json:"external_ref"`
-	Tags               []string  `json:"tags"`
-	Metadata           []byte    `json:"metadata"`
-	IdempotencyKey     *string   `json:"idempotency_key"`
-	AcceptanceCriteria []byte    `json:"acceptance_criteria"`
+	ProjectID          uuid.UUID  `json:"project_id"`
+	Type               *string    `json:"type"`
+	Title              string     `json:"title"`
+	Body               *string    `json:"body"`
+	Status             *string    `json:"status"`
+	Priority           *string    `json:"priority"`
+	Assignee           *string    `json:"assignee"`
+	Position           *float64   `json:"position"`
+	Source             *string    `json:"source"`
+	ExternalRef        *string    `json:"external_ref"`
+	Tags               []string   `json:"tags"`
+	Metadata           []byte     `json:"metadata"`
+	IdempotencyKey     *string    `json:"idempotency_key"`
+	AcceptanceCriteria []byte     `json:"acceptance_criteria"`
+	DueAt              *time.Time `json:"due_at"`
 }
 
 func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (Item, error) {
@@ -67,6 +71,7 @@ func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (Item, e
 		arg.Metadata,
 		arg.IdempotencyKey,
 		arg.AcceptanceCriteria,
+		arg.DueAt,
 	)
 	var i Item
 	err := row.Scan(
@@ -95,12 +100,13 @@ func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (Item, e
 		&i.Version,
 		&i.Embedding,
 		&i.EmbeddingModel,
+		&i.DueAt,
 	)
 	return i, err
 }
 
 const getItem = `-- name: GetItem :one
-SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model FROM items WHERE id = $1 AND deleted_at IS NULL
+SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at FROM items WHERE id = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetItem(ctx context.Context, id uuid.UUID) (Item, error) {
@@ -132,12 +138,13 @@ func (q *Queries) GetItem(ctx context.Context, id uuid.UUID) (Item, error) {
 		&i.Version,
 		&i.Embedding,
 		&i.EmbeddingModel,
+		&i.DueAt,
 	)
 	return i, err
 }
 
 const getItemByRef = `-- name: GetItemByRef :one
-SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model FROM items WHERE lower(ref) = lower($1) AND deleted_at IS NULL
+SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at FROM items WHERE lower(ref) = lower($1) AND deleted_at IS NULL
 `
 
 func (q *Queries) GetItemByRef(ctx context.Context, lower string) (Item, error) {
@@ -169,12 +176,116 @@ func (q *Queries) GetItemByRef(ctx context.Context, lower string) (Item, error) 
 		&i.Version,
 		&i.Embedding,
 		&i.EmbeddingModel,
+		&i.DueAt,
 	)
 	return i, err
 }
 
+const listAgendaItems = `-- name: ListAgendaItems :many
+SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, i.due_at, p.slug AS project_slug,
+       COALESCE((SELECT max(a.created_at) FROM activity a WHERE a.item_id = i.id), i.created_at)::timestamptz AS last_activity
+FROM items i
+JOIN projects p ON p.id = i.project_id AND p.status = 'active'
+WHERE i.deleted_at IS NULL
+  AND i.status NOT IN ('done', 'wontfix')
+  AND i.due_at IS NOT NULL
+  AND i.due_at <= $1::timestamptz
+ORDER BY i.due_at ASC, CASE i.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'med' THEN 2 ELSE 3 END
+LIMIT $2::int
+`
+
+type ListAgendaItemsParams struct {
+	Horizon time.Time `json:"horizon"`
+	Lim     int32     `json:"lim"`
+}
+
+type ListAgendaItemsRow struct {
+	ID                 uuid.UUID       `json:"id"`
+	ProjectID          uuid.UUID       `json:"project_id"`
+	Type               string          `json:"type"`
+	Title              string          `json:"title"`
+	Body               string          `json:"body"`
+	Status             string          `json:"status"`
+	Priority           string          `json:"priority"`
+	Assignee           *string         `json:"assignee"`
+	Position           float64         `json:"position"`
+	Source             string          `json:"source"`
+	ExternalRef        *string         `json:"external_ref"`
+	Tags               []string        `json:"tags"`
+	Metadata           json.RawMessage `json:"metadata"`
+	CreatedAt          time.Time       `json:"created_at"`
+	UpdatedAt          time.Time       `json:"updated_at"`
+	ClosedAt           *time.Time      `json:"closed_at"`
+	DeletedAt          *time.Time      `json:"deleted_at"`
+	Search             interface{}     `json:"search"`
+	IdempotencyKey     *string         `json:"idempotency_key"`
+	AcceptanceCriteria json.RawMessage `json:"acceptance_criteria"`
+	Seq                int64           `json:"seq"`
+	Ref                string          `json:"ref"`
+	Version            int32           `json:"version"`
+	Embedding          pgvec.Vector    `json:"embedding"`
+	EmbeddingModel     string          `json:"embedding_model"`
+	DueAt              *time.Time      `json:"due_at"`
+	ProjectSlug        string          `json:"project_slug"`
+	LastActivity       time.Time       `json:"last_activity"`
+}
+
+// Dated open items across active projects, due on or before the horizon,
+// oldest due first — so overdue rows lead. last_activity is the newest activity
+// row on the item (its creation when the log was trimmed): an overdue item
+// with no activity since its due date has quietly expired, and the agenda
+// flags it.
+func (q *Queries) ListAgendaItems(ctx context.Context, arg ListAgendaItemsParams) ([]ListAgendaItemsRow, error) {
+	rows, err := q.db.Query(ctx, listAgendaItems, arg.Horizon, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAgendaItemsRow
+	for rows.Next() {
+		var i ListAgendaItemsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Type,
+			&i.Title,
+			&i.Body,
+			&i.Status,
+			&i.Priority,
+			&i.Assignee,
+			&i.Position,
+			&i.Source,
+			&i.ExternalRef,
+			&i.Tags,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ClosedAt,
+			&i.DeletedAt,
+			&i.Search,
+			&i.IdempotencyKey,
+			&i.AcceptanceCriteria,
+			&i.Seq,
+			&i.Ref,
+			&i.Version,
+			&i.Embedding,
+			&i.EmbeddingModel,
+			&i.DueAt,
+			&i.ProjectSlug,
+			&i.LastActivity,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listItems = `-- name: ListItems :many
-SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model FROM items i
+SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, i.due_at FROM items i
 WHERE i.deleted_at IS NULL
   AND ($1::uuid IS NOT NULL OR NOT EXISTS (
         SELECT 1 FROM projects p
@@ -186,9 +297,10 @@ WHERE i.deleted_at IS NULL
   AND ($5::text IS NULL OR $5::text = ANY(i.tags))
   AND ($6::timestamptz IS NULL OR i.updated_at >= $6)
   AND ($7::text IS NULL OR i.search @@ plainto_tsquery('english', $7))
+  AND ($8::timestamptz IS NULL OR (i.due_at IS NOT NULL AND i.due_at <= $8))
 ORDER BY i.position ASC, i.created_at DESC
-LIMIT COALESCE($9::int, 500)
-OFFSET COALESCE($8::int, 0)
+LIMIT COALESCE($10::int, 500)
+OFFSET COALESCE($9::int, 0)
 `
 
 type ListItemsParams struct {
@@ -199,6 +311,7 @@ type ListItemsParams struct {
 	Tag          *string     `json:"tag"`
 	UpdatedSince *time.Time  `json:"updated_since"`
 	Q            *string     `json:"q"`
+	DueBefore    *time.Time  `json:"due_before"`
 	Off          *int32      `json:"off"`
 	Lim          *int32      `json:"lim"`
 }
@@ -216,6 +329,7 @@ func (q *Queries) ListItems(ctx context.Context, arg ListItemsParams) ([]Item, e
 		arg.Tag,
 		arg.UpdatedSince,
 		arg.Q,
+		arg.DueBefore,
 		arg.Off,
 		arg.Lim,
 	)
@@ -252,6 +366,7 @@ func (q *Queries) ListItems(ctx context.Context, arg ListItemsParams) ([]Item, e
 			&i.Version,
 			&i.Embedding,
 			&i.EmbeddingModel,
+			&i.DueAt,
 		); err != nil {
 			return nil, err
 		}
@@ -264,7 +379,7 @@ func (q *Queries) ListItems(ctx context.Context, arg ListItemsParams) ([]Item, e
 }
 
 const listOpenItemsByProject = `-- name: ListOpenItemsByProject :many
-SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model FROM items
+SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at FROM items
 WHERE project_id = $1 AND deleted_at IS NULL AND status NOT IN ('done', 'wontfix')
 ORDER BY
     CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'med' THEN 2 ELSE 3 END,
@@ -312,6 +427,7 @@ func (q *Queries) ListOpenItemsByProject(ctx context.Context, arg ListOpenItemsB
 			&i.Version,
 			&i.Embedding,
 			&i.EmbeddingModel,
+			&i.DueAt,
 		); err != nil {
 			return nil, err
 		}
@@ -326,7 +442,7 @@ func (q *Queries) ListOpenItemsByProject(ctx context.Context, arg ListOpenItemsB
 const softDeleteItem = `-- name: SoftDeleteItem :one
 UPDATE items SET deleted_at = now(), updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model
+RETURNING id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at
 `
 
 func (q *Queries) SoftDeleteItem(ctx context.Context, id uuid.UUID) (Item, error) {
@@ -358,6 +474,7 @@ func (q *Queries) SoftDeleteItem(ctx context.Context, id uuid.UUID) (Item, error
 		&i.Version,
 		&i.Embedding,
 		&i.EmbeddingModel,
+		&i.DueAt,
 	)
 	return i, err
 }
@@ -374,6 +491,11 @@ UPDATE items SET
     tags      = COALESCE($8::text[], tags),
     metadata  = COALESCE($9::jsonb, metadata),
     acceptance_criteria = COALESCE($10::jsonb, acceptance_criteria),
+    -- due_at: clear_due_at wipes it, a supplied value replaces it, absent keeps it.
+    due_at    = CASE
+                    WHEN $11::bool THEN NULL
+                    ELSE COALESCE($12::timestamptz, due_at)
+                END,
     closed_at = CASE
                     WHEN COALESCE($4::text, status) IN ('done', 'wontfix')
                         THEN COALESCE(closed_at, now())
@@ -395,24 +517,26 @@ UPDATE items SET
                 END,
     version    = version + 1,
     updated_at = now()
-WHERE id = $11 AND deleted_at IS NULL
-  AND ($12::int IS NULL OR version = $12)
-RETURNING id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model
+WHERE id = $13 AND deleted_at IS NULL
+  AND ($14::int IS NULL OR version = $14)
+RETURNING id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at
 `
 
 type UpdateItemParams struct {
-	Title              *string   `json:"title"`
-	Body               *string   `json:"body"`
-	Type               *string   `json:"type"`
-	Status             *string   `json:"status"`
-	Priority           *string   `json:"priority"`
-	Assignee           *string   `json:"assignee"`
-	Position           *float64  `json:"position"`
-	Tags               []string  `json:"tags"`
-	Metadata           []byte    `json:"metadata"`
-	AcceptanceCriteria []byte    `json:"acceptance_criteria"`
-	ID                 uuid.UUID `json:"id"`
-	ExpectedVersion    *int32    `json:"expected_version"`
+	Title              *string    `json:"title"`
+	Body               *string    `json:"body"`
+	Type               *string    `json:"type"`
+	Status             *string    `json:"status"`
+	Priority           *string    `json:"priority"`
+	Assignee           *string    `json:"assignee"`
+	Position           *float64   `json:"position"`
+	Tags               []string   `json:"tags"`
+	Metadata           []byte     `json:"metadata"`
+	AcceptanceCriteria []byte     `json:"acceptance_criteria"`
+	ClearDueAt         bool       `json:"clear_due_at"`
+	DueAt              *time.Time `json:"due_at"`
+	ID                 uuid.UUID  `json:"id"`
+	ExpectedVersion    *int32     `json:"expected_version"`
 }
 
 // Bumps version on every write. When expected_version is supplied it acts as a
@@ -429,6 +553,8 @@ func (q *Queries) UpdateItem(ctx context.Context, arg UpdateItemParams) (Item, e
 		arg.Tags,
 		arg.Metadata,
 		arg.AcceptanceCriteria,
+		arg.ClearDueAt,
+		arg.DueAt,
 		arg.ID,
 		arg.ExpectedVersion,
 	)
@@ -459,6 +585,7 @@ func (q *Queries) UpdateItem(ctx context.Context, arg UpdateItemParams) (Item, e
 		&i.Version,
 		&i.Embedding,
 		&i.EmbeddingModel,
+		&i.DueAt,
 	)
 	return i, err
 }
