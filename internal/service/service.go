@@ -391,9 +391,12 @@ func plural(n int, noun string) string {
 
 // GlobalContext builds the horizontal "load the map" view across active
 // projects. Top items for every project come from one windowed query (no N+1),
-// and the result is briefly cached (cleared on any write).
-func (s *Service) GlobalContext(ctx context.Context, v Verbosity) (dto.GlobalContext, error) {
-	key := "global:" + string(v)
+// and the result is briefly cached (cleared on any write). domain narrows the
+// map to life|school|work ("" = every domain). Private projects are never on
+// the map: the caller must name them (ProjectContext) to see them, and no
+// actor-based default decides that silently.
+func (s *Service) GlobalContext(ctx context.Context, v Verbosity, domain string) (dto.GlobalContext, error) {
+	key := "global:" + string(v) + ":" + domain
 	if cached, ok := s.cache.get(key); ok {
 		return cached.(dto.GlobalContext), nil
 	}
@@ -401,7 +404,7 @@ func (s *Service) GlobalContext(ctx context.Context, v Verbosity) (dto.GlobalCon
 		if cached, ok := s.cache.get(key); ok {
 			return cached.(dto.GlobalContext), nil
 		}
-		return s.buildGlobalContext(ctx, v, key)
+		return s.buildGlobalContext(ctx, v, domain, key)
 	})
 	if err != nil {
 		return dto.GlobalContext{}, err
@@ -409,9 +412,13 @@ func (s *Service) GlobalContext(ctx context.Context, v Verbosity) (dto.GlobalCon
 	return res.(dto.GlobalContext), nil
 }
 
-func (s *Service) buildGlobalContext(ctx context.Context, v Verbosity, key string) (dto.GlobalContext, error) {
+func (s *Service) buildGlobalContext(ctx context.Context, v Verbosity, domain string, key string) (dto.GlobalContext, error) {
 	active := "active"
-	projects, err := s.St.ListProjects(ctx, &active)
+	var dom *string
+	if domain != "" {
+		dom = &domain
+	}
+	projects, err := s.St.ListProjects(ctx, store.ListProjectsParams{Status: &active, Domain: dom, IncludePrivate: false})
 	if err != nil {
 		return dto.GlobalContext{}, err
 	}

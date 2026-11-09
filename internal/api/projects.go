@@ -10,9 +10,19 @@ import (
 	"flightdeck/internal/store"
 )
 
+// listProjects serves the web UI, which is Tailscale-only and single-user, so
+// private projects are included (the UI marks them). ?domain= narrows to
+// life|school|work.
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
-	status := optStr(r.URL.Query(), "status")
-	projects, err := s.St.ListProjects(r.Context(), status)
+	q := r.URL.Query()
+	domain := optStr(q, "domain")
+	if err := service.ValidateProjectDomain(domain); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	projects, err := s.St.ListProjects(r.Context(), store.ListProjectsParams{
+		Status: optStr(q, "status"), Domain: domain, IncludePrivate: true,
+	})
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -41,6 +51,10 @@ type createProjectReq struct {
 	// Parent is the slug of an existing project to nest under; empty/omitted
 	// creates a root project.
 	Parent *string `json:"parent"`
+	// Domain (life|school|work, default work) and Sensitivity (normal|private,
+	// default normal).
+	Domain      *string `json:"domain"`
+	Sensitivity *string `json:"sensitivity"`
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -53,7 +67,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "slug and name are required")
 		return
 	}
-	if err := service.ValidateProjectStatus(req.Status); err != nil {
+	if err := service.ValidateProjectTags(req.Status, req.Domain, req.Sensitivity); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -72,6 +86,8 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		RepoUrl:      req.RepoURL,
 		SiteUrl:      req.SiteURL,
 		ParentSlug:   parent,
+		Domain:       req.Domain,
+		Sensitivity:  req.Sensitivity,
 	})
 	if err != nil {
 		writeDBError(w, err)
@@ -90,7 +106,9 @@ type patchProjectReq struct {
 	SiteURL      *string  `json:"site_url"`
 	// Parent is tri-state: omitted leaves the parent unchanged, "" clears it
 	// (project becomes a root), a slug re-parents under that project.
-	Parent *string `json:"parent"`
+	Parent      *string `json:"parent"`
+	Domain      *string `json:"domain"`
+	Sensitivity *string `json:"sensitivity"`
 }
 
 func (s *Server) patchProject(w http.ResponseWriter, r *http.Request) {
@@ -99,7 +117,7 @@ func (s *Server) patchProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := service.ValidateProjectStatus(req.Status); err != nil {
+	if err := service.ValidateProjectTags(req.Status, req.Domain, req.Sensitivity); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -109,7 +127,7 @@ func (s *Server) patchProject(w http.ResponseWriter, r *http.Request) {
 		writeParentError(w, err)
 		return
 	}
-	p, err := s.St.UpdateProject(r.Context(), store.UpdateProjectParams{
+	p, err := s.Svc.UpdateProject(r.Context(), store.UpdateProjectParams{
 		Slug:         slug,
 		Name:         req.Name,
 		Status:       req.Status,
@@ -120,6 +138,8 @@ func (s *Server) patchProject(w http.ResponseWriter, r *http.Request) {
 		SiteUrl:      req.SiteURL,
 		SetParent:    req.Parent != nil,
 		ParentSlug:   parent,
+		Domain:       req.Domain,
+		Sensitivity:  req.Sensitivity,
 	})
 	if err != nil {
 		writeDBError(w, err)

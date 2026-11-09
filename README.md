@@ -46,7 +46,13 @@ docker compose exec flightdeck flightdeck keys revoke <id>
 
 - `GET/POST /projects`, `GET/PATCH /projects/{slug}` — projects can nest into a
   tree via `parent` (a project slug; PATCH `""` re-roots, cycles are rejected
-  with 400); `GET /context/{slug}` lists direct `children`
+  with 400); `GET /context/{slug}` lists direct `children`. Each project has a
+  `domain` (`life|school|work`, default work; `GET /projects?domain=` and
+  `GET /context?domain=` filter by it) and a `sensitivity` (`normal|private`).
+  Private projects are omitted from every cross-project surface — MCP
+  `list_projects`, `get_global_context`, `search`, `/next-action`, `/stale`,
+  `usage_report` top projects — unless the call names the slug; the web UI
+  shows them with a 🔒 marker
 - `DELETE /projects/{slug}?confirm={slug}` — permanently deletes a project and
   all its items and activity. Two-step by design: PATCH `status=archived` first
   (reversible — hides the project from orient reads, listings and pickers), then
@@ -84,7 +90,7 @@ Wire into a Claude Code project's `.mcp.json` (needs a write-capable key):
 
 Tools — orient: `list_projects`, `get_project_context`, `get_global_context`,
 `search`, `list_items`, `get_item`, `next_action`, `digest`, `stale`. Log:
-`create_project`, `create_item`, `update_item`, `log_activity`,
+`create_project`, `update_project`, `create_item`, `update_item`, `log_activity`,
 `update_project_summary`, `set_project_instructions`, `link_items`,
 `unlink_items`, `add_item_ref`, `list_item_refs`, `record_context_impact`,
 `archive_project`.

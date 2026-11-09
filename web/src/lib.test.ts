@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { COLUMNS, PRIORITY_COLOR, PRIORITY_RANK, formatDue, isOverdue, projectColor, projectTreeOrder, relativeTime, updateNotice } from "./lib";
+import { chipLabel, COLUMNS, PRIORITY_COLOR, PRIORITY_RANK, formatDue, isOverdue, projectColor, projectTreeOrder, relativeTime, updateNotice } from "./lib";
 
 describe("formatDue", () => {
   const now = new Date(2026, 10, 9, 12, 0, 0); // Nov 9 2026, local
@@ -14,6 +14,14 @@ describe("formatDue", () => {
   it("phrases a past date as overdue", () => {
     expect(formatDue(new Date(2026, 10, 1, 23, 59).toISOString(), now)).toBe("overdue Nov 1");
     expect(isOverdue(new Date(2026, 10, 1).toISOString(), now)).toBe(true);
+  });
+});
+
+describe("chipLabel", () => {
+  it("marks private projects and leaves the rest alone", () => {
+    expect(chipLabel({ slug: "dating", sensitivity: "private" })).toBe("🔒 dating");
+    expect(chipLabel({ slug: "finforge", sensitivity: "normal" })).toBe("finforge");
+    expect(chipLabel({ slug: "finforge" })).toBe("finforge");
   });
 });
 

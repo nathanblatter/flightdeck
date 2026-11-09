@@ -99,9 +99,11 @@ GROUP BY 1
 ORDER BY 1;
 
 -- name: TopProjectsByToolCalls :many
+-- Private projects are left out: usage_report is a cross-project surface.
 SELECT project, count(*) AS calls
 FROM tool_calls
 WHERE called_at >= $1 AND project <> ''
+  AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.slug = tool_calls.project AND p.sensitivity = 'private')
 GROUP BY project
 ORDER BY calls DESC
 LIMIT 10;

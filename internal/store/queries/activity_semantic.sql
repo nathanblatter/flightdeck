@@ -26,6 +26,8 @@ FROM activity a
 JOIN activity_embeddings e ON e.activity_id = a.id
 WHERE e.embedding IS NOT NULL
   AND (sqlc.narg('project_id')::uuid IS NULL OR a.project_id = sqlc.narg('project_id'))
+  AND (sqlc.narg('project_id')::uuid IS NOT NULL OR NOT EXISTS (
+        SELECT 1 FROM projects pp WHERE pp.id = a.project_id AND pp.sensitivity = 'private'))
   AND (e.embedding <=> sqlc.arg('query_embedding')::vector) < sqlc.arg('max_distance')::float8
 ORDER BY e.embedding <=> sqlc.arg('query_embedding')::vector
 LIMIT COALESCE(sqlc.narg('lim')::int, 25);

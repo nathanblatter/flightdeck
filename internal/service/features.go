@@ -116,7 +116,9 @@ func (s *Service) Stale(ctx context.Context, inProgressBefore, bugBefore time.Ti
 // agent passes its cwd and gets the slug. The longest (most specific) key match
 // wins so "/…/dev/personal-site" beats a stray "site" token.
 func (s *Service) ResolveProject(ctx context.Context, hint string) (store.Project, error) {
-	projects, err := s.St.ListProjects(ctx, nil)
+	// A path hint names a project as explicitly as a slug does, so private
+	// projects stay resolvable.
+	projects, err := s.St.ListProjects(ctx, store.ListProjectsParams{IncludePrivate: true})
 	if err != nil {
 		return store.Project{}, err
 	}

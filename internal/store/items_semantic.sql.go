@@ -21,6 +21,8 @@ FROM items i
 WHERE i.deleted_at IS NULL
   AND i.embedding IS NOT NULL
   AND ($2::uuid IS NULL OR i.project_id = $2)
+  AND ($2::uuid IS NOT NULL OR NOT EXISTS (
+        SELECT 1 FROM projects pp WHERE pp.id = i.project_id AND pp.sensitivity = 'private'))
   AND ($3::text IS NULL OR i.type = $3)
 `
 
@@ -103,6 +105,8 @@ FROM items i
 WHERE i.deleted_at IS NULL
   AND i.embedding IS NOT NULL
   AND ($2::uuid IS NULL OR i.project_id = $2)
+  AND ($2::uuid IS NOT NULL OR NOT EXISTS (
+        SELECT 1 FROM projects pp WHERE pp.id = i.project_id AND pp.sensitivity = 'private'))
   AND ($3::text IS NULL OR i.type = $3)
   AND (i.embedding <=> $1::vector) < $4::float8
 ORDER BY i.embedding <=> $1::vector

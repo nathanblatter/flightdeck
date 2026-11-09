@@ -174,6 +174,7 @@ WHERE i.deleted_at IS NULL
   AND i.status NOT IN ('done', 'wontfix')
   AND i.type <> 'reference'
   AND ($1::uuid IS NULL OR i.project_id = $1)
+  AND ($1::uuid IS NOT NULL OR p.sensitivity <> 'private')
   AND NOT EXISTS (
       SELECT 1 FROM item_links l
       JOIN items b ON b.id = l.from_item_id AND b.deleted_at IS NULL
@@ -224,6 +225,7 @@ type ListReadyItemsRow struct {
 
 // Open items across active projects that are NOT blocked by any open blocker,
 // ranked for "what should I work on": priority, then in_progress/todo, then age.
+// Private projects are included only when asked for by project_id.
 func (q *Queries) ListReadyItems(ctx context.Context, arg ListReadyItemsParams) ([]ListReadyItemsRow, error) {
 	rows, err := q.db.Query(ctx, listReadyItems, arg.ProjectID, arg.Lim)
 	if err != nil {

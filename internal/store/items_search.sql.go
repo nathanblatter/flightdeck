@@ -38,7 +38,7 @@ SELECT id, project_id, type, title, body, status, priority, assignee, position, 
                         i.position ASC
            ) AS rn
     FROM items i
-    JOIN projects p ON p.id = i.project_id AND p.status = 'active'
+    JOIN projects p ON p.id = i.project_id AND p.status = 'active' AND p.sensitivity <> 'private'
     WHERE i.deleted_at IS NULL AND i.status NOT IN ('done', 'wontfix')
       AND i.type <> 'reference'
 ) s
@@ -78,7 +78,8 @@ type ListTopOpenItemsPerProjectRow struct {
 }
 
 // Top-N open items for every active project in a single windowed query — replaces
-// the per-project N+1 loop that built the global "load the map" view.
+// the per-project N+1 loop that built the global "load the map" view. Private
+// projects never appear on the global map, so they are skipped here too.
 func (q *Queries) ListTopOpenItemsPerProject(ctx context.Context, perProject int32) ([]ListTopOpenItemsPerProjectRow, error) {
 	rows, err := q.db.Query(ctx, listTopOpenItemsPerProject, perProject)
 	if err != nil {
@@ -134,6 +135,8 @@ FROM items i
 WHERE i.deleted_at IS NULL
   AND i.search @@ plainto_tsquery('english', $1)
   AND ($2::uuid IS NULL OR i.project_id = $2)
+  AND ($2::uuid IS NOT NULL OR NOT EXISTS (
+        SELECT 1 FROM projects pp WHERE pp.id = i.project_id AND pp.sensitivity = 'private'))
   AND ($3::text IS NULL OR i.type = $3)
 ORDER BY rank DESC
 LIMIT COALESCE($4::int, 50)
@@ -244,6 +247,8 @@ WITH ql AS (
     WHERE i.deleted_at IS NULL
       AND i.search @@ anyq.q
       AND ($5::uuid IS NULL OR i.project_id = $5)
+      AND ($5::uuid IS NOT NULL OR NOT EXISTS (
+          SELECT 1 FROM projects pp WHERE pp.id = i.project_id AND pp.sensitivity = 'private'))
       AND ($6::text IS NULL OR i.type = $6)
 )
 SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, i.due_at, h.matched, n.total, (h.matched::float8 / n.total)::float8 AS coverage, h.rank
@@ -371,6 +376,8 @@ FROM items i
 WHERE i.deleted_at IS NULL
   AND (i.title % $1 OR i.ref % $1 OR i.title ILIKE '%' || $1 || '%')
   AND ($2::uuid IS NULL OR i.project_id = $2)
+  AND ($2::uuid IS NOT NULL OR NOT EXISTS (
+        SELECT 1 FROM projects pp WHERE pp.id = i.project_id AND pp.sensitivity = 'private'))
   AND ($3::text IS NULL OR i.type = $3)
 ORDER BY sim DESC
 LIMIT COALESCE($4::int, 25)

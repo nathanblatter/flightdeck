@@ -34,6 +34,8 @@ FROM items i
 WHERE i.deleted_at IS NULL
   AND i.embedding IS NOT NULL
   AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
+  AND (sqlc.narg('project_id')::uuid IS NOT NULL OR NOT EXISTS (
+        SELECT 1 FROM projects pp WHERE pp.id = i.project_id AND pp.sensitivity = 'private'))
   AND (sqlc.narg('type')::text IS NULL OR i.type = sqlc.narg('type'))
   AND (i.embedding <=> sqlc.arg('query_embedding')::vector) < sqlc.arg('max_distance')::float8
 ORDER BY i.embedding <=> sqlc.arg('query_embedding')::vector
@@ -49,4 +51,6 @@ FROM items i
 WHERE i.deleted_at IS NULL
   AND i.embedding IS NOT NULL
   AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
+  AND (sqlc.narg('project_id')::uuid IS NOT NULL OR NOT EXISTS (
+        SELECT 1 FROM projects pp WHERE pp.id = i.project_id AND pp.sensitivity = 'private'))
   AND (sqlc.narg('type')::text IS NULL OR i.type = sqlc.narg('type'));

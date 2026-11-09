@@ -131,6 +131,8 @@ type Project struct {
 	ItemSeq      int64     `json:"item_seq"`
 	Aliases      []string  `json:"aliases"`
 	ParentSlug   *string   `json:"parent_slug"`
+	Domain       string    `json:"domain"`
+	Sensitivity  string    `json:"sensitivity"`
 }
 
 type ProjectShare struct {

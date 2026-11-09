@@ -536,6 +536,7 @@ const topProjectsByToolCalls = `-- name: TopProjectsByToolCalls :many
 SELECT project, count(*) AS calls
 FROM tool_calls
 WHERE called_at >= $1 AND project <> ''
+  AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.slug = tool_calls.project AND p.sensitivity = 'private')
 GROUP BY project
 ORDER BY calls DESC
 LIMIT 10
@@ -546,6 +547,7 @@ type TopProjectsByToolCallsRow struct {
 	Calls   int64  `json:"calls"`
 }
 
+// Private projects are left out: usage_report is a cross-project surface.
 func (q *Queries) TopProjectsByToolCalls(ctx context.Context, calledAt time.Time) ([]TopProjectsByToolCallsRow, error) {
 	rows, err := q.db.Query(ctx, topProjectsByToolCalls, calledAt)
 	if err != nil {

@@ -32,6 +32,12 @@ export const TYPE_GLYPH: Record<string, string> = {
   reference: "📘",
 };
 
+// chipLabel is the text on a project chip: the slug, with a lock marker when
+// the project is private (hidden from cross-project agent surfaces).
+export function chipLabel(p: { slug: string; sensitivity?: string }): string {
+  return p.sensitivity === "private" ? `🔒 ${p.slug}` : p.slug;
+}
+
 // Deterministic, pleasant color per project slug (stable across reloads).
 export function projectColor(slug: string): string {
   let h = 0;

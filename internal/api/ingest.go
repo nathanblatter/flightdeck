@@ -177,7 +177,8 @@ func (s *Server) ingestCapture(w http.ResponseWriter, r *http.Request) {
 // shape Shortcuts' "Choose from List" consumes without any unpacking actions.
 func (s *Server) ingestProjects(w http.ResponseWriter, r *http.Request) {
 	active := "active"
-	projects, err := s.St.ListProjects(r.Context(), &active)
+	// Single-user capture picker: private projects must be fileable-to.
+	projects, err := s.St.ListProjects(r.Context(), store.ListProjectsParams{Status: &active, IncludePrivate: true})
 	if err != nil {
 		writeDBError(w, err)
 		return

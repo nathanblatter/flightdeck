@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type Project } from "../api";
-import { projectColor, projectTreeOrder, relativeTime, TYPE_GLYPH } from "../lib";
+import {
+  api,
+  PROJECT_DOMAINS,
+  type Project,
+  type ProjectDomain,
+  type ProjectSensitivity,
+} from "../api";
+import { chipLabel, projectColor, projectTreeOrder, relativeTime, TYPE_GLYPH } from "../lib";
 import { ProjectSharing } from "./Sharing";
 
 export function ProjectDrawer({
@@ -68,6 +74,16 @@ export function ProjectDrawer({
     },
   });
 
+  // domain / sensitivity save on change; the server validates the values.
+  const setTags = useMutation({
+    mutationFn: (body: { domain?: ProjectDomain; sensitivity?: ProjectSensitivity }) =>
+      api.patchProject(slug, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["context", slug] });
+      qc.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+
   // A project can't be its own parent, and nesting under a descendant would
   // cycle — filter both out so the picker only offers legal parents.
   const descendants = new Set<string>([slug]);
@@ -106,10 +122,14 @@ export function ProjectDrawer({
               <span
                 className="project-chip"
                 style={{ background: projectColor(data.project.slug) }}
+                title={data.project.sensitivity === "private" ? "Private: hidden from cross-project agent views" : undefined}
               >
-                {data.project.slug}
+                {chipLabel(data.project)}
               </span>
               <h2>{data.project.name}</h2>
+              <span className="tag" title="Domain">
+                {data.project.domain}
+              </span>
               <button className="icon-btn" onClick={onClose}>
                 ✕
               </button>
@@ -138,6 +158,40 @@ export function ProjectDrawer({
               )}
             </section>
 
+            <section>
+              <label className="field-label">Domain &amp; sensitivity</label>
+              <div className="drawer-actions">
+                <select
+                  value={data.project.domain}
+                  disabled={setTags.isPending}
+                  onChange={(e) => setTags.mutate({ domain: e.target.value as ProjectDomain })}
+                >
+                  {PROJECT_DOMAINS.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={data.project.sensitivity}
+                  disabled={setTags.isPending}
+                  onChange={(e) =>
+                    setTags.mutate({ sensitivity: e.target.value as ProjectSensitivity })
+                  }
+                >
+                  <option value="normal">normal</option>
+                  <option value="private">🔒 private</option>
+                </select>
+              </div>
+              <p className="muted sm">
+                Private projects are left out of get_global_context, list_projects and
+                search unless an agent names the slug.
+              </p>
+              {setTags.isError && (
+                <span className="muted sm">{(setTags.error as Error).message}</span>
+              )}
+            </section>
+
             {data.children && data.children.length > 0 && (
               <section>
                 <h3 className="section-title">
@@ -152,6 +206,7 @@ export function ProjectDrawer({
                       title={c.summary || c.name}
                       onClick={() => onOpenProject(c.slug)}
                     >
+                      {c.sensitivity === "private" ? "🔒 " : ""}
                       {c.name}
                     </button>
                   ))}

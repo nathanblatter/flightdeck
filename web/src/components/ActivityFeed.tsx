@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { Project } from "../api";
 import { api } from "../api";
-import { projectColor, relativeTime } from "../lib";
+import { chipLabel, projectColor, relativeTime } from "../lib";
 
 const KIND_LABEL: Record<string, string> = {
   decision: "Decision",
@@ -44,7 +44,7 @@ export function ActivityFeed({
                   className="project-chip sm"
                   style={{ background: projectColor(project.slug) }}
                 >
-                  {project.slug}
+                  {chipLabel(project)}
                 </span>
               )}
               <span className="feed-body">{a.body}</span>

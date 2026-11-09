@@ -147,12 +147,16 @@ type Querier interface {
 	// Archived projects are excluded unless asked for by name (status='archived').
 	// That exclusion is what makes archiving mean something: without it 'archived'
 	// is just a label and the project still clutters every orient read and picker.
-	ListProjects(ctx context.Context, status *string) ([]Project, error)
+	// domain narrows to one of life|school|work. include_private=false drops
+	// sensitivity='private' projects: cross-project surfaces (MCP list_projects,
+	// global context) pass false; resolvers and the single-user web UI pass true.
+	ListProjects(ctx context.Context, arg ListProjectsParams) ([]Project, error)
 	// Object keys owned by items about to be hard-deleted, so the maintenance
 	// sweep can remove the blobs before the rows cascade away.
 	ListPurgeableAttachmentKeys(ctx context.Context, deletedAt *time.Time) ([]string, error)
 	// Open items across active projects that are NOT blocked by any open blocker,
 	// ranked for "what should I work on": priority, then in_progress/todo, then age.
+	// Private projects are included only when asked for by project_id.
 	ListReadyItems(ctx context.Context, arg ListReadyItemsParams) ([]ListReadyItemsRow, error)
 	ListRecentActivityByProject(ctx context.Context, arg ListRecentActivityByProjectParams) ([]Activity, error)
 	ListRecentDecisionsByProject(ctx context.Context, arg ListRecentDecisionsByProjectParams) ([]Activity, error)
@@ -164,12 +168,14 @@ type Querier interface {
 	ListSettings(ctx context.Context) ([]Setting, error)
 	ListShareStateHashes(ctx context.Context, shareID uuid.UUID) ([]ListShareStateHashesRow, error)
 	ListSharesForProject(ctx context.Context, projectID uuid.UUID) ([]ProjectShare, error)
-	// in_progress items whose last update is older than the cutoff.
+	// in_progress items whose last update is older than the cutoff. Private
+	// projects are skipped: this is a cross-project view with no slug named.
 	ListStaleInProgress(ctx context.Context, updatedAt time.Time) ([]ListStaleInProgressRow, error)
 	// active projects whose latest activity is newer than the last summary refresh.
 	ListStaleProjectSummaries(ctx context.Context) ([]ListStaleProjectSummariesRow, error)
 	// Top-N open items for every active project in a single windowed query — replaces
-	// the per-project N+1 loop that built the global "load the map" view.
+	// the per-project N+1 loop that built the global "load the map" view. Private
+	// projects never appear on the global map, so they are skipped here too.
 	ListTopOpenItemsPerProject(ctx context.Context, perProject int32) ([]ListTopOpenItemsPerProjectRow, error)
 	// bugs still sitting in backlog (never triaged) older than the cutoff.
 	ListUntriagedBugs(ctx context.Context, createdAt time.Time) ([]ListUntriagedBugsRow, error)
@@ -271,6 +277,7 @@ type Querier interface {
 	// Per-tool behavior over a window: volume, error count, latency percentiles,
 	// and average result size (the token-cost proxy agents pay to call it).
 	ToolCallStats(ctx context.Context, calledAt time.Time) ([]ToolCallStatsRow, error)
+	// Private projects are left out: usage_report is a cross-project surface.
 	TopProjectsByToolCalls(ctx context.Context, calledAt time.Time) ([]TopProjectsByToolCallsRow, error)
 	TouchAPIKey(ctx context.Context, id uuid.UUID) error
 	// Bumps version on every write. When expected_version is supplied it acts as a
