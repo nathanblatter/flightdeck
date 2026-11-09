@@ -30,8 +30,8 @@ func (q *Queries) CountQueryLexemes(ctx context.Context, q_ string) (int32, erro
 }
 
 const listTopOpenItemsPerProject = `-- name: ListTopOpenItemsPerProject :many
-SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, project_slug, rn FROM (
-    SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, p.slug AS project_slug,
+SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at, project_slug, rn FROM (
+    SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, i.due_at, p.slug AS project_slug,
            row_number() OVER (
                PARTITION BY i.project_id
                ORDER BY CASE i.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'med' THEN 2 ELSE 3 END,
@@ -71,6 +71,7 @@ type ListTopOpenItemsPerProjectRow struct {
 	Version            int32           `json:"version"`
 	Embedding          pgvec.Vector    `json:"embedding"`
 	EmbeddingModel     string          `json:"embedding_model"`
+	DueAt              *time.Time      `json:"due_at"`
 	ProjectSlug        string          `json:"project_slug"`
 	Rn                 int64           `json:"rn"`
 }
@@ -112,6 +113,7 @@ func (q *Queries) ListTopOpenItemsPerProject(ctx context.Context, perProject int
 			&i.Version,
 			&i.Embedding,
 			&i.EmbeddingModel,
+			&i.DueAt,
 			&i.ProjectSlug,
 			&i.Rn,
 		); err != nil {
@@ -126,7 +128,7 @@ func (q *Queries) ListTopOpenItemsPerProject(ctx context.Context, perProject int
 }
 
 const searchItems = `-- name: SearchItems :many
-SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, ts_rank(i.search, plainto_tsquery('english', $1)) AS rank
+SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, i.due_at, ts_rank(i.search, plainto_tsquery('english', $1)) AS rank
 FROM items i
 WHERE i.deleted_at IS NULL
   AND i.search @@ plainto_tsquery('english', $1)
@@ -169,6 +171,7 @@ type SearchItemsRow struct {
 	Version            int32           `json:"version"`
 	Embedding          pgvec.Vector    `json:"embedding"`
 	EmbeddingModel     string          `json:"embedding_model"`
+	DueAt              *time.Time      `json:"due_at"`
 	Rank               float32         `json:"rank"`
 }
 
@@ -212,6 +215,7 @@ func (q *Queries) SearchItems(ctx context.Context, arg SearchItemsParams) ([]Sea
 			&i.Version,
 			&i.Embedding,
 			&i.EmbeddingModel,
+			&i.DueAt,
 			&i.Rank,
 		); err != nil {
 			return nil, err
@@ -241,7 +245,7 @@ WITH ql AS (
       AND ($5::uuid IS NULL OR i.project_id = $5)
       AND ($6::text IS NULL OR i.type = $6)
 )
-SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, h.matched, n.total, (h.matched::float8 / n.total)::float8 AS coverage, h.rank
+SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, i.due_at, h.matched, n.total, (h.matched::float8 / n.total)::float8 AS coverage, h.rank
 FROM hits h
 JOIN items i ON i.id = h.id
 CROSS JOIN n
@@ -287,6 +291,7 @@ type SearchItemsAnyRow struct {
 	Version            int32           `json:"version"`
 	Embedding          pgvec.Vector    `json:"embedding"`
 	EmbeddingModel     string          `json:"embedding_model"`
+	DueAt              *time.Time      `json:"due_at"`
 	Matched            int32           `json:"matched"`
 	Total              int32           `json:"total"`
 	Coverage           float64         `json:"coverage"`
@@ -343,6 +348,7 @@ func (q *Queries) SearchItemsAny(ctx context.Context, arg SearchItemsAnyParams) 
 			&i.Version,
 			&i.Embedding,
 			&i.EmbeddingModel,
+			&i.DueAt,
 			&i.Matched,
 			&i.Total,
 			&i.Coverage,
@@ -359,7 +365,7 @@ func (q *Queries) SearchItemsAny(ctx context.Context, arg SearchItemsAnyParams) 
 }
 
 const searchItemsFuzzy = `-- name: SearchItemsFuzzy :many
-SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, greatest(similarity(i.title, $1), similarity(i.ref, $1)) AS sim
+SELECT i.id, i.project_id, i.type, i.title, i.body, i.status, i.priority, i.assignee, i.position, i.source, i.external_ref, i.tags, i.metadata, i.created_at, i.updated_at, i.closed_at, i.deleted_at, i.search, i.idempotency_key, i.acceptance_criteria, i.seq, i.ref, i.version, i.embedding, i.embedding_model, i.due_at, greatest(similarity(i.title, $1), similarity(i.ref, $1)) AS sim
 FROM items i
 WHERE i.deleted_at IS NULL
   AND (i.title % $1 OR i.ref % $1 OR i.title ILIKE '%' || $1 || '%')
@@ -402,6 +408,7 @@ type SearchItemsFuzzyRow struct {
 	Version            int32           `json:"version"`
 	Embedding          pgvec.Vector    `json:"embedding"`
 	EmbeddingModel     string          `json:"embedding_model"`
+	DueAt              *time.Time      `json:"due_at"`
 	Sim                interface{}     `json:"sim"`
 }
 
@@ -447,6 +454,7 @@ func (q *Queries) SearchItemsFuzzy(ctx context.Context, arg SearchItemsFuzzyPara
 			&i.Version,
 			&i.Embedding,
 			&i.EmbeddingModel,
+			&i.DueAt,
 			&i.Sim,
 		); err != nil {
 			return nil, err
