@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	// The runtime image is alpine without tzdata; embedding the zone database
+	// keeps TZ / FLIGHTDECK_TZ resolvable so date-only due dates land on the
+	// owner's calendar day, not UTC.
 	"errors"
 	"fmt"
 	"log"
@@ -12,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
