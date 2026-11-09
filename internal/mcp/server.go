@@ -172,8 +172,8 @@ const Instructions = "Orient before your first write: get_project_context(slug) 
 	"Flightdeck is the shared memory for projects: what each one is, what's open, what was decided and why. " +
 	"Keep it fresh as you work: create_item for new tasks/bugs/ideas, update_item to move status, log_activity for decisions and progress — capture the why. " +
 	"Search before filing what may exist. Date-bound work gets due_at (get_agenda shows what's due). " +
-	"Before you finish, call record_context_impact once: did the context help, hurt, or neither? neutral is valid; session_id defaults to this session. " +
-	"Facts go in a reference item (type=reference), not the summary; summaries describe state."
+	"Durable facts go in type=reference items, not the summary; summaries describe state. " +
+	"Before you finish, call record_context_impact once: did the context help, hurt, or neither? neutral is valid."
 
 // NewHandler builds the MCP server, registers all tools, and returns an
 // http.Handler serving the streamable-HTTP transport (mount it at /mcp).
