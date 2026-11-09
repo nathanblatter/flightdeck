@@ -165,7 +165,7 @@ func TestAgendaOmittedWhenNothingDated(t *testing.T) {
 	st, svc := setup(t)
 	p := mkProject(t, st, "code")
 	_ = mkItem(t, svc, store.CreateItemParams{ProjectID: p.ID, Title: "undated"}, "t")
-	g, err := svc.GlobalContext(context.Background(), service.VerbosityCompact)
+	g, err := svc.GlobalContext(context.Background(), service.VerbosityCompact, "")
 	if err != nil {
 		t.Fatalf("global: %v", err)
 	}
