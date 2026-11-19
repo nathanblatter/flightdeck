@@ -302,32 +302,40 @@ func withLogging(next http.Handler) http.Handler {
 }
 
 // runKeygen generates a random API key, stores its hash, and prints the raw key
-// once. Usage: flightdeck keygen <name> <scope[,scope...]>
+// once. Usage: flightdeck keygen <name> <scope[,scope...]> [expiry-days] [--projects slug[,slug...]]
 func runKeygen(args []string) {
-	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: flightdeck keygen <name> <scope[,scope...]> [expiry-days]")
+	pos, projects, hasProjects, err := splitProjectsFlag(args)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(pos) < 2 || len(pos) > 3 {
+		fmt.Fprintln(os.Stderr, "usage: flightdeck keygen <name> <scope[,scope...]> [expiry-days] [--projects slug[,slug...]]")
 		fmt.Fprintln(os.Stderr, "  scopes: read, write, ingest")
+		fmt.Fprintln(os.Stderr, "  --projects: restrict the key to these projects (ingest scope only)")
 		os.Exit(2)
 	}
-	name := args[0]
-	scopes := splitScopes(args[1])
+	name := pos[0]
+	scopes := splitScopes(pos[1])
 	if len(scopes) == 0 {
 		log.Fatal("at least one scope is required")
 	}
+	if hasProjects {
+		if err := auth.CheckRestrictionScopes(scopes); err != nil {
+			log.Fatalf("refusing to create key: %v", err)
+		}
+	}
 	var expiresAt *time.Time
-	if len(args) >= 3 {
-		days, err := strconv.Atoi(args[2])
+	if len(pos) == 3 {
+		days, err := strconv.Atoi(pos[2])
 		if err != nil || days <= 0 {
-			log.Fatalf("invalid expiry-days %q", args[2])
+			log.Fatalf("invalid expiry-days %q", pos[2])
 		}
 		t := time.Now().AddDate(0, 0, days)
 		expiresAt = &t
 	}
 
-	raw := newRawKey()
-	hash := auth.HashKey(raw)
-
-	st, err := store.NewStore(context.Background(), mustDatabaseURL())
+	ctx := context.Background()
+	st, err := store.NewStore(ctx, mustDatabaseURL())
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
@@ -337,11 +345,21 @@ func runKeygen(args []string) {
 		log.Fatalf("migrate: %v", err)
 	}
 
-	key, err := st.CreateAPIKey(context.Background(), store.CreateAPIKeyParams{
-		Name:      name,
-		KeyHash:   hash,
-		Scopes:    scopes,
-		ExpiresAt: expiresAt,
+	var projectIDs []uuid.UUID // nil = unrestricted
+	if hasProjects {
+		projectIDs, err = service.ResolveKeyProjects(ctx, st, projects)
+		if err != nil {
+			log.Fatalf("refusing to create key: %v", err)
+		}
+	}
+
+	raw := newRawKey()
+	key, err := st.CreateAPIKey(ctx, store.CreateAPIKeyParams{
+		Name:       name,
+		KeyHash:    auth.HashKey(raw),
+		Scopes:     scopes,
+		ExpiresAt:  expiresAt,
+		ProjectIds: projectIDs,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -350,19 +368,58 @@ func runKeygen(args []string) {
 		log.Fatalf("create key: %v", err)
 	}
 
-	fmt.Printf("created key %q (id=%s) scopes=%v\n", key.Name, key.ID, key.Scopes)
+	desc, err := service.DescribeKeyProjects(ctx, st, key.ProjectIds)
+	if err != nil {
+		log.Fatalf("describe projects: %v", err)
+	}
+	fmt.Printf("created key %q (id=%s) scopes=%v projects=%s\n", key.Name, key.ID, key.Scopes, desc)
 	fmt.Println("\n  API KEY (shown once — store it now):")
 	fmt.Printf("    %s\n", raw)
 }
 
-// runKeys lists, revokes, or rotates API keys.
-// Usage: flightdeck keys [list|revoke <id>|rotate <id>]
+// splitProjectsFlag pulls `--projects a,b` (or `--projects=a,b`) out of args,
+// anywhere in the list, and returns the remaining positional args unchanged so
+// the existing `keygen <name> <scopes> [expiry-days]` form keeps working.
+func splitProjectsFlag(args []string) (pos, projects []string, found bool, err error) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--projects" || a == "-projects":
+			if i+1 >= len(args) {
+				return nil, nil, false, errors.New("--projects needs a value: slug[,slug...]")
+			}
+			if found {
+				return nil, nil, false, errors.New("--projects given more than once")
+			}
+			found = true
+			projects = splitScopes(args[i+1])
+			i++
+		case strings.HasPrefix(a, "--projects=") || strings.HasPrefix(a, "-projects="):
+			if found {
+				return nil, nil, false, errors.New("--projects given more than once")
+			}
+			found = true
+			projects = splitScopes(a[strings.IndexByte(a, '=')+1:])
+		default:
+			pos = append(pos, a)
+		}
+	}
+	if found && len(projects) == 0 {
+		return nil, nil, false, errors.New("--projects needs at least one project slug")
+	}
+	return pos, projects, found, nil
+}
+
+const keysUsage = "usage: flightdeck keys [list | revoke <id> | rotate <id> | restrict <id> <slug[,slug...]> | unrestrict <id>]"
+
+// runKeys lists, revokes, rotates, or (un)restricts API keys.
 func runKeys(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: flightdeck keys [list|revoke <id>|rotate <id>]")
+		fmt.Fprintln(os.Stderr, keysUsage)
 		os.Exit(2)
 	}
-	st, err := store.NewStore(context.Background(), mustDatabaseURL())
+	ctx := context.Background()
+	st, err := store.NewStore(ctx, mustDatabaseURL())
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
@@ -370,7 +427,7 @@ func runKeys(args []string) {
 
 	switch args[0] {
 	case "list":
-		keys, err := st.ListAPIKeys(context.Background())
+		keys, err := st.ListAPIKeys(ctx)
 		if err != nil {
 			log.Fatalf("list keys: %v", err)
 		}
@@ -383,18 +440,15 @@ func runKeys(args []string) {
 			if k.Revoked {
 				status = "revoked"
 			}
-			fmt.Printf("%s  %-20s  %-8s  scopes=%v  last_used=%s\n", k.ID, k.Name, status, k.Scopes, last)
+			projects, err := service.DescribeKeyProjects(ctx, st, k.ProjectIds)
+			if err != nil {
+				log.Fatalf("describe projects: %v", err)
+			}
+			fmt.Printf("%s  %-20s  %-8s  scopes=%v  projects=%s  last_used=%s\n", k.ID, k.Name, status, k.Scopes, projects, last)
 		}
 	case "revoke":
-		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "usage: flightdeck keys revoke <id>")
-			os.Exit(2)
-		}
-		id, err := uuid.Parse(args[1])
-		if err != nil {
-			log.Fatalf("invalid id: %v", err)
-		}
-		k, err := st.RevokeAPIKey(context.Background(), id)
+		id := keyIDArg(args, "revoke <id>")
+		k, err := st.RevokeAPIKey(ctx, id)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				log.Fatalf("no key with id %s", id)
@@ -403,16 +457,9 @@ func runKeys(args []string) {
 		}
 		fmt.Printf("revoked key %q (id=%s)\n", k.Name, k.ID)
 	case "rotate":
-		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "usage: flightdeck keys rotate <id>")
-			os.Exit(2)
-		}
-		id, err := uuid.Parse(args[1])
-		if err != nil {
-			log.Fatalf("invalid id: %v", err)
-		}
+		id := keyIDArg(args, "rotate <id>")
 		raw := newRawKey()
-		k, err := st.RotateAPIKey(context.Background(), store.RotateAPIKeyParams{ID: id, KeyHash: auth.HashKey(raw)})
+		k, err := st.RotateAPIKey(ctx, store.RotateAPIKeyParams{ID: id, KeyHash: auth.HashKey(raw)})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				log.Fatalf("no key with id %s", id)
@@ -422,10 +469,46 @@ func runKeys(args []string) {
 		fmt.Printf("rotated key %q (id=%s) — old secret is now invalid\n", k.Name, k.ID)
 		fmt.Println("\n  NEW API KEY (shown once — store it now):")
 		fmt.Printf("    %s\n", raw)
+	case "restrict":
+		if len(args) != 3 {
+			fmt.Fprintln(os.Stderr, "usage: flightdeck keys restrict <id> <slug[,slug...]>")
+			os.Exit(2)
+		}
+		id := keyIDArg(args, "restrict <id> <slug[,slug...]>")
+		k, err := service.RestrictAPIKey(ctx, st, id, splitScopes(args[2]))
+		if err != nil {
+			log.Fatalf("restrict: %v", err)
+		}
+		desc, err := service.DescribeKeyProjects(ctx, st, k.ProjectIds)
+		if err != nil {
+			log.Fatalf("describe projects: %v", err)
+		}
+		fmt.Printf("restricted key %q (id=%s) to projects=%s (secret unchanged)\n", k.Name, k.ID, desc)
+	case "unrestrict":
+		id := keyIDArg(args, "unrestrict <id>")
+		k, err := service.UnrestrictAPIKey(ctx, st, id)
+		if err != nil {
+			log.Fatalf("unrestrict: %v", err)
+		}
+		fmt.Printf("unrestricted key %q (id=%s): projects=all\n", k.Name, k.ID)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown keys subcommand %q\n", args[0])
+		fmt.Fprintf(os.Stderr, "unknown keys subcommand %q\n%s\n", args[0], keysUsage)
 		os.Exit(2)
 	}
+}
+
+// keyIDArg parses args[1] as a key id, exiting with usage on a missing or
+// malformed id.
+func keyIDArg(args []string, usage string) uuid.UUID {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: flightdeck keys "+usage)
+		os.Exit(2)
+	}
+	id, err := uuid.Parse(args[1])
+	if err != nil {
+		log.Fatalf("invalid id: %v", err)
+	}
+	return id
 }
 
 func splitScopes(s string) []string {

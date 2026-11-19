@@ -30,17 +30,64 @@ Generate keys with the `keygen` subcommand (prints the raw key once):
 ```bash
 docker compose exec flightdeck flightdeck keygen "my agent" read,write,ingest
 docker compose exec flightdeck flightdeck keygen "site widget" ingest
+docker compose exec flightdeck flightdeck keygen "ci evals" ingest 365 --projects ai-therapist
 ```
 
-Scopes: `read` (orient), `write` (create/update/log), `ingest` (bug reports only).
+Usage: `flightdeck keygen <name> <scope[,scope...]> [expiry-days] [--projects slug[,slug...]]`
+(`--projects=slug` also works, anywhere in the argument list).
+
 Send the key as the `X-API-Key` header. The UI stores it in `localStorage`.
 
-List and revoke keys:
+### Scopes
+
+| Scope | Grants |
+|---|---|
+| `read` | every GET route (orient, search, context, the SSE stream) |
+| `write` | create/update/log routes, and `/mcp` (MCP needs a write-capable key) |
+| `ingest` | the write-only intake surface: `POST /api/ingest/bug`, `POST /api/ingest/capture`, `POST /api/ingest/attachments/{id}` (fresh reporter/capture items only), `GET /api/ingest/projects` |
+
+### Project restriction
+
+A key can be limited to specific projects. Without a restriction (the default,
+and every key minted before this existed) a key reaches every project.
+
+- **Ingest-only.** Project limits are enforced on the ingest surface only. A
+  restricted key may hold only the `ingest` scope: `keygen` and
+  `keys restrict` refuse anything else, and so does the database (a CHECK on
+  `api_keys`). A restricted key is refused with
+  `403 project-restricted keys are limited to the ingest surface` on every
+  other route, `/mcp` and the SSE stream, whatever its scopes; that check lives
+  in the auth middleware, and a test walks every registered route to prove it.
+- **On the ingest surface**, `bug` and `capture` answer `403` for a project
+  outside the list (also for a slug that does not exist, so the key cannot
+  probe which projects exist); `attachments/{id}` answers `403` for an item in
+  another project; `GET /api/ingest/projects` lists only the allowed projects.
+- **Stored as project ids.** The CLI takes slugs (or an alias, such as an old
+  slug kept after a rename; an exact slug wins, an ambiguous alias is refused)
+  and resolves them once. A renamed project stays allowed. A deleted project
+  stays denied, even if a new project reuses its slug: a key whose only
+  project is gone can write nowhere. Requests themselves name projects by
+  exact slug, as before.
+
+Restrict or unrestrict an existing key without changing its secret:
 
 ```bash
-docker compose exec flightdeck flightdeck keys list
-docker compose exec flightdeck flightdeck keys revoke <id>
+docker compose exec flightdeck flightdeck keys restrict <id> ai-therapist[,other-project]
+docker compose exec flightdeck flightdeck keys unrestrict <id>
 ```
+
+`restrict` replaces any previous list. To change scopes, mint a new key.
+
+### List, revoke, rotate
+
+```bash
+docker compose exec flightdeck flightdeck keys list      # shows scopes and projects=all|slug,... per key
+docker compose exec flightdeck flightdeck keys revoke <id>
+docker compose exec flightdeck flightdeck keys rotate <id>  # new secret, same id, scopes and projects
+```
+
+In `keys list`, a restricted key's deleted project shows as `deleted:<id>`.
+The setup wizard (`WORK-SETUP.md`) mints unrestricted keys.
 
 ## HTTP API (`/api`)
 
@@ -287,7 +334,7 @@ cd web && npm install && npm run dev
 ## Layout
 
 ```
-cmd/flightdeck/main.go   serve | migrate | keygen; wires /api, /mcp, embedded UI
+cmd/flightdeck/main.go   serve | migrate | keygen | keys; wires /api, /mcp, embedded UI
 internal/store/          sqlc-generated queries + pgx pool + goose runner
 internal/service/        shared logic (item create → activity, status_change log)
 internal/api/            HTTP handlers

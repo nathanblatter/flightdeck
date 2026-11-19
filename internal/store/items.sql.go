@@ -453,7 +453,7 @@ func (q *Queries) ListOpenItemsByProject(ctx context.Context, arg ListOpenItemsB
 }
 
 const listReferenceItemsByProject = `-- name: ListReferenceItemsByProject :many
-SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model FROM items
+SELECT id, project_id, type, title, body, status, priority, assignee, position, source, external_ref, tags, metadata, created_at, updated_at, closed_at, deleted_at, search, idempotency_key, acceptance_criteria, seq, ref, version, embedding, embedding_model, due_at, recur FROM items
 WHERE project_id = $1 AND deleted_at IS NULL AND type = 'reference'
 ORDER BY position ASC, title ASC
 LIMIT $2
@@ -502,6 +502,8 @@ func (q *Queries) ListReferenceItemsByProject(ctx context.Context, arg ListRefer
 			&i.Version,
 			&i.Embedding,
 			&i.EmbeddingModel,
+			&i.DueAt,
+			&i.Recur,
 		); err != nil {
 			return nil, err
 		}

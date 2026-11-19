@@ -34,14 +34,15 @@ type ActivityEmbedding struct {
 }
 
 type ApiKey struct {
-	ID         uuid.UUID  `json:"id"`
-	Name       string     `json:"name"`
-	KeyHash    string     `json:"key_hash"`
-	Scopes     []string   `json:"scopes"`
-	CreatedAt  time.Time  `json:"created_at"`
-	LastUsedAt *time.Time `json:"last_used_at"`
-	Revoked    bool       `json:"revoked"`
-	ExpiresAt  *time.Time `json:"expires_at"`
+	ID         uuid.UUID   `json:"id"`
+	Name       string      `json:"name"`
+	KeyHash    string      `json:"key_hash"`
+	Scopes     []string    `json:"scopes"`
+	CreatedAt  time.Time   `json:"created_at"`
+	LastUsedAt *time.Time  `json:"last_used_at"`
+	Revoked    bool        `json:"revoked"`
+	ExpiresAt  *time.Time  `json:"expires_at"`
+	ProjectIds []uuid.UUID `json:"project_ids"`
 }
 
 type Attachment struct {

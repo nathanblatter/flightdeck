@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"flightdeck/internal/auth"
 	"flightdeck/internal/dto"
@@ -49,9 +50,21 @@ func (s *Server) itemByIDOrRef(r *http.Request) (store.Item, error) {
 // just-filed bug/capture item. Same posture as /ingest/bug (CORS, rate limit,
 // ingest scope) plus the freshness/source guard.
 func (s *Server) ingestUploadAttachments(w http.ResponseWriter, r *http.Request) {
+	id, _ := auth.FromContext(r.Context())
 	item, err := s.itemByIDOrRef(r)
 	if err != nil {
+		// A restricted key gets 403 for an unknown item too, so it cannot
+		// probe refs in projects outside its list.
+		if id.Restricted() && errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusForbidden, errProjectNotAllowed)
+			return
+		}
 		writeDBError(w, err)
+		return
+	}
+	// A project-restricted key may only attach to items in its projects.
+	if !id.AllowsProject(item.ProjectID) {
+		writeError(w, http.StatusForbidden, errProjectNotAllowed)
 		return
 	}
 	if item.Source != "bug_reporter" && item.Source != "capture" {
