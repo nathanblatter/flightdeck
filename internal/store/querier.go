@@ -43,6 +43,7 @@ type Querier interface {
 	// and punctuation removed). Decides whether the any-term tier can differ from
 	// AND-FTS at all (needs >= 2) and gates the trigram fallback.
 	CountQueryLexemes(ctx context.Context, q_ string) (int32, error)
+	// project_ids NULL = unrestricted (see migration 00024).
 	CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (ApiKey, error)
 	CreateActivity(ctx context.Context, arg CreateActivityParams) (Activity, error)
 	CreateAttachment(ctx context.Context, arg CreateAttachmentParams) (Attachment, error)
@@ -71,7 +72,12 @@ type Querier interface {
 	// --- durable outbox ---
 	// Called inside the originating write's transaction (transactional outbox).
 	EnqueueWebhookEvent(ctx context.Context, arg EnqueueWebhookEventParams) (WebhookEvent, error)
+	// Case-insensitive match on a project's aliases (old slugs, repo dir names).
+	// Used to resolve a human-typed project reference when no slug matches; the
+	// caller treats more than one row as ambiguous.
+	FindProjectsByAlias(ctx context.Context, alias string) ([]Project, error)
 	GetAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey, error)
+	GetAPIKeyByID(ctx context.Context, id uuid.UUID) (ApiKey, error)
 	GetAttachment(ctx context.Context, id uuid.UUID) (Attachment, error)
 	GetContextImpactByIdempotencyKey(ctx context.Context, arg GetContextImpactByIdempotencyKeyParams) (ContextImpactEvent, error)
 	GetItem(ctx context.Context, id uuid.UUID) (Item, error)
@@ -267,6 +273,9 @@ type Querier interface {
 	// list_projects / resolve_project are slug lookups, not orientation, so they
 	// do not count here even though ActorStats counts them as orient_calls.
 	SessionStats(ctx context.Context, calledAt time.Time) (SessionStatsRow, error)
+	// Restrict (non-NULL) or unrestrict (NULL) an existing key without re-minting
+	// its secret.
+	SetAPIKeyProjects(ctx context.Context, arg SetAPIKeyProjectsParams) (SetAPIKeyProjectsRow, error)
 	// Store an embedding, but only if the item's content hasn't changed since it was
 	// read for embedding (guarded by the still-NULL check) — so an edit that races
 	// the embedder isn't clobbered with a stale vector.

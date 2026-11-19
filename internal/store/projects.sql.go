@@ -198,6 +198,51 @@ func (q *Queries) DeleteProject(ctx context.Context, slug string) (Project, erro
 	return i, err
 }
 
+const findProjectsByAlias = `-- name: FindProjectsByAlias :many
+SELECT id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug, domain, sensitivity FROM projects
+WHERE EXISTS (SELECT 1 FROM unnest(aliases) a WHERE lower(a) = lower($1::text))
+ORDER BY slug
+`
+
+// Case-insensitive match on a project's aliases (old slugs, repo dir names).
+// Used to resolve a human-typed project reference when no slug matches; the
+// caller treats more than one row as ambiguous.
+func (q *Queries) FindProjectsByAlias(ctx context.Context, alias string) ([]Project, error) {
+	rows, err := q.db.Query(ctx, findProjectsByAlias, alias)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Project
+	for rows.Next() {
+		var i Project
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Name,
+			&i.Status,
+			&i.Summary,
+			&i.RepoUrl,
+			&i.SiteUrl,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Instructions,
+			&i.ItemSeq,
+			&i.Aliases,
+			&i.ParentSlug,
+			&i.Domain,
+			&i.Sensitivity,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getProjectByID = `-- name: GetProjectByID :one
 SELECT id, slug, name, status, summary, repo_url, site_url, created_at, updated_at, instructions, item_seq, aliases, parent_slug, domain, sensitivity FROM projects WHERE id = $1
 `

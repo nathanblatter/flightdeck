@@ -4,6 +4,14 @@ SELECT * FROM projects WHERE slug = $1;
 -- name: GetProjectByID :one
 SELECT * FROM projects WHERE id = $1;
 
+-- name: FindProjectsByAlias :many
+-- Case-insensitive match on a project's aliases (old slugs, repo dir names).
+-- Used to resolve a human-typed project reference when no slug matches; the
+-- caller treats more than one row as ambiguous.
+SELECT * FROM projects
+WHERE EXISTS (SELECT 1 FROM unnest(aliases) a WHERE lower(a) = lower(sqlc.arg('alias')::text))
+ORDER BY slug;
+
 -- name: ListProjects :many
 -- Archived projects are excluded unless asked for by name (status='archived').
 -- That exclusion is what makes archiving mean something: without it 'archived'

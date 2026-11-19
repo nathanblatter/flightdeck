@@ -2,8 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
 
 	"flightdeck/internal/auth"
 	"flightdeck/internal/dto"
@@ -52,9 +55,8 @@ func (s *Server) ingestBug(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "message too long")
 		return
 	}
-	project, err := s.St.GetProjectBySlug(r.Context(), rep.Site)
-	if err != nil {
-		writeDBError(w, err)
+	project, ok := s.ingestProject(w, r, rep.Site)
+	if !ok {
 		return
 	}
 
@@ -84,6 +86,33 @@ func (s *Server) ingestBug(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, dto.ToItem(item))
+}
+
+// errProjectNotAllowed is the 403 for a project-restricted key targeting a
+// project outside its list.
+const errProjectNotAllowed = "this key is not allowed to write to that project"
+
+// ingestProject resolves the target project of an ingest write by exact slug
+// and enforces the caller's project restriction (auth.Identity.Projects). On
+// failure it has already written the response. A restricted key gets the same
+// 403 for an unknown slug as for a forbidden one, so it cannot probe which
+// projects exist; unrestricted keys keep the 404 they always got.
+func (s *Server) ingestProject(w http.ResponseWriter, r *http.Request, slug string) (store.Project, bool) {
+	id, _ := auth.FromContext(r.Context())
+	project, err := s.St.GetProjectBySlug(r.Context(), slug)
+	if err != nil {
+		if id.Restricted() && errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusForbidden, errProjectNotAllowed)
+			return store.Project{}, false
+		}
+		writeDBError(w, err)
+		return store.Project{}, false
+	}
+	if !id.AllowsProject(project.ID) {
+		writeError(w, http.StatusForbidden, errProjectNotAllowed)
+		return store.Project{}, false
+	}
+	return project, true
 }
 
 // bugTitle derives an item title from the report message, truncating on rune
@@ -138,9 +167,8 @@ func (s *Server) ingestCapture(w http.ResponseWriter, r *http.Request) {
 	}
 	priority := severityToPriority(req.Priority) // reuse: maps ""→med, low/high/urgent pass through
 
-	project, err := s.St.GetProjectBySlug(r.Context(), req.Project)
-	if err != nil {
-		writeDBError(w, err)
+	project, ok := s.ingestProject(w, r, req.Project)
+	if !ok {
 		return
 	}
 
@@ -173,7 +201,8 @@ func (s *Server) ingestCapture(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, dto.ToItem(item))
 }
 
-// ingestProjects returns active project slugs as a flat string array — the
+// ingestProjects returns active project slugs (only the allowed ones for a
+// project-restricted key) as a flat string array — the
 // shape Shortcuts' "Choose from List" consumes without any unpacking actions.
 func (s *Server) ingestProjects(w http.ResponseWriter, r *http.Request) {
 	active := "active"
@@ -183,9 +212,13 @@ func (s *Server) ingestProjects(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
+	// A project-restricted key only sees the projects it may file into.
+	id, _ := auth.FromContext(r.Context())
 	slugs := make([]string, 0, len(projects))
 	for _, p := range projects {
-		slugs = append(slugs, p.Slug)
+		if id.AllowsProject(p.ID) {
+			slugs = append(slugs, p.Slug)
+		}
 	}
 	writeJSON(w, http.StatusOK, slugs)
 }

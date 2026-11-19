@@ -24,24 +24,27 @@ func (q *Queries) CountActiveAPIKeys(ctx context.Context) (int64, error) {
 }
 
 const createAPIKey = `-- name: CreateAPIKey :one
-INSERT INTO api_keys (name, key_hash, scopes, expires_at)
-VALUES ($1, $2, $3, $4)
-RETURNING id, name, key_hash, scopes, created_at, last_used_at, revoked, expires_at
+INSERT INTO api_keys (name, key_hash, scopes, expires_at, project_ids)
+VALUES ($1, $2, $3, $4, $5::uuid[])
+RETURNING id, name, key_hash, scopes, created_at, last_used_at, revoked, expires_at, project_ids
 `
 
 type CreateAPIKeyParams struct {
-	Name      string     `json:"name"`
-	KeyHash   string     `json:"key_hash"`
-	Scopes    []string   `json:"scopes"`
-	ExpiresAt *time.Time `json:"expires_at"`
+	Name       string      `json:"name"`
+	KeyHash    string      `json:"key_hash"`
+	Scopes     []string    `json:"scopes"`
+	ExpiresAt  *time.Time  `json:"expires_at"`
+	ProjectIds []uuid.UUID `json:"project_ids"`
 }
 
+// project_ids NULL = unrestricted (see migration 00024).
 func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (ApiKey, error) {
 	row := q.db.QueryRow(ctx, createAPIKey,
 		arg.Name,
 		arg.KeyHash,
 		arg.Scopes,
 		arg.ExpiresAt,
+		arg.ProjectIds,
 	)
 	var i ApiKey
 	err := row.Scan(
@@ -53,12 +56,13 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (Api
 		&i.LastUsedAt,
 		&i.Revoked,
 		&i.ExpiresAt,
+		&i.ProjectIds,
 	)
 	return i, err
 }
 
 const getAPIKeyByHash = `-- name: GetAPIKeyByHash :one
-SELECT id, name, key_hash, scopes, created_at, last_used_at, revoked, expires_at FROM api_keys
+SELECT id, name, key_hash, scopes, created_at, last_used_at, revoked, expires_at, project_ids FROM api_keys
 WHERE key_hash = $1 AND revoked = false
   AND (expires_at IS NULL OR expires_at > now())
 `
@@ -75,22 +79,45 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey, 
 		&i.LastUsedAt,
 		&i.Revoked,
 		&i.ExpiresAt,
+		&i.ProjectIds,
+	)
+	return i, err
+}
+
+const getAPIKeyByID = `-- name: GetAPIKeyByID :one
+SELECT id, name, key_hash, scopes, created_at, last_used_at, revoked, expires_at, project_ids FROM api_keys WHERE id = $1
+`
+
+func (q *Queries) GetAPIKeyByID(ctx context.Context, id uuid.UUID) (ApiKey, error) {
+	row := q.db.QueryRow(ctx, getAPIKeyByID, id)
+	var i ApiKey
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.KeyHash,
+		&i.Scopes,
+		&i.CreatedAt,
+		&i.LastUsedAt,
+		&i.Revoked,
+		&i.ExpiresAt,
+		&i.ProjectIds,
 	)
 	return i, err
 }
 
 const listAPIKeys = `-- name: ListAPIKeys :many
-SELECT id, name, scopes, created_at, last_used_at, revoked FROM api_keys
+SELECT id, name, scopes, project_ids, created_at, last_used_at, revoked FROM api_keys
 ORDER BY created_at DESC
 `
 
 type ListAPIKeysRow struct {
-	ID         uuid.UUID  `json:"id"`
-	Name       string     `json:"name"`
-	Scopes     []string   `json:"scopes"`
-	CreatedAt  time.Time  `json:"created_at"`
-	LastUsedAt *time.Time `json:"last_used_at"`
-	Revoked    bool       `json:"revoked"`
+	ID         uuid.UUID   `json:"id"`
+	Name       string      `json:"name"`
+	Scopes     []string    `json:"scopes"`
+	ProjectIds []uuid.UUID `json:"project_ids"`
+	CreatedAt  time.Time   `json:"created_at"`
+	LastUsedAt *time.Time  `json:"last_used_at"`
+	Revoked    bool        `json:"revoked"`
 }
 
 func (q *Queries) ListAPIKeys(ctx context.Context) ([]ListAPIKeysRow, error) {
@@ -106,6 +133,7 @@ func (q *Queries) ListAPIKeys(ctx context.Context) ([]ListAPIKeysRow, error) {
 			&i.ID,
 			&i.Name,
 			&i.Scopes,
+			&i.ProjectIds,
 			&i.CreatedAt,
 			&i.LastUsedAt,
 			&i.Revoked,
@@ -176,6 +204,44 @@ func (q *Queries) RotateAPIKey(ctx context.Context, arg RotateAPIKeyParams) (Rot
 		&i.ID,
 		&i.Name,
 		&i.Scopes,
+		&i.CreatedAt,
+		&i.LastUsedAt,
+		&i.Revoked,
+	)
+	return i, err
+}
+
+const setAPIKeyProjects = `-- name: SetAPIKeyProjects :one
+UPDATE api_keys SET project_ids = $2::uuid[]
+WHERE id = $1
+RETURNING id, name, scopes, project_ids, created_at, last_used_at, revoked
+`
+
+type SetAPIKeyProjectsParams struct {
+	ID         uuid.UUID   `json:"id"`
+	ProjectIds []uuid.UUID `json:"project_ids"`
+}
+
+type SetAPIKeyProjectsRow struct {
+	ID         uuid.UUID   `json:"id"`
+	Name       string      `json:"name"`
+	Scopes     []string    `json:"scopes"`
+	ProjectIds []uuid.UUID `json:"project_ids"`
+	CreatedAt  time.Time   `json:"created_at"`
+	LastUsedAt *time.Time  `json:"last_used_at"`
+	Revoked    bool        `json:"revoked"`
+}
+
+// Restrict (non-NULL) or unrestrict (NULL) an existing key without re-minting
+// its secret.
+func (q *Queries) SetAPIKeyProjects(ctx context.Context, arg SetAPIKeyProjectsParams) (SetAPIKeyProjectsRow, error) {
+	row := q.db.QueryRow(ctx, setAPIKeyProjects, arg.ID, arg.ProjectIds)
+	var i SetAPIKeyProjectsRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Scopes,
+		&i.ProjectIds,
 		&i.CreatedAt,
 		&i.LastUsedAt,
 		&i.Revoked,
